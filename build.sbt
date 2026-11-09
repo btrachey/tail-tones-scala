@@ -1,5 +1,8 @@
 scalaVersion := "3.3.3" // A Long Term Support version.
 
+name := "tail-tones"
+Compile / mainClass := Some("tailtones.Main")
+
 enablePlugins(ScalaNativePlugin)
 
 // set to Debug for compilation details (Info is default)
@@ -7,6 +10,16 @@ logLevel := Level.Info
 
 // import to add Scala Native options
 import scala.scalanative.build._
+
+// Native-only build (no sbt-crossproject): declare Native artifacts explicitly.
+// Pin the suffix here so a Scala Native bump is a one-line change (plan §2).
+val nativeSuffix = "_native0.5_3"
+
+libraryDependencies ++= Seq(
+  "com.lihaoyi" % ("ujson" + nativeSuffix) % "4.4.3",
+  "com.lihaoyi" % ("os-lib" + nativeSuffix) % "0.11.10",
+  "org.scalameta" % ("munit" + nativeSuffix) % "1.3.6" % Test
+)
 
 // defaults set with common options shown
 nativeConfig ~= { c =>
