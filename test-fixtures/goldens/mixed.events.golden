@@ -1,0 +1,152 @@
+kind=engine-start name=null
+kind=level level=warn line={"level":"warn","logger":"mixed.json","msg":"mixed json 1"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 2"
+kind=level level=info line={"log":"mixed docker line 3 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 4[0m
+kind=level level=neutral line=plain neutral chatter 5 carries no level word at all
+kind=level level=info line=2026-11-09T10:06:18.500Z info mixed iso-timestamp 6
+kind=level level=info line=2026-11-09 10:07:49,123 info com.acme.mixed.Service - mixed logback 7
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 8"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 9"
+kind=level level=info line={"log":"mixed docker line 10 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 11[0m
+kind=level level=neutral line=plain neutral chatter 12 carries no level word at all
+kind=level level=warn line=2026-11-09T10:13:49.500Z warn mixed iso-timestamp 13
+kind=level level=info line=2026-11-09 10:14:38,123 info com.acme.mixed.Service - mixed logback 14
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 15"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 16"
+kind=level level=info line={"log":"mixed docker line 17 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 18[0m
+kind=level level=neutral line=plain neutral chatter 19 carries no level word at all
+kind=level level=info line=2026-11-09T10:20:20.500Z info mixed iso-timestamp 20
+kind=level level=info line=2026-11-09 10:21:27,123 info com.acme.mixed.Service - mixed logback 21
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 22"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 23"
+kind=level level=info line={"log":"mixed docker line 24 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 25[0m
+kind=level level=neutral line=plain neutral chatter 26 carries no level word at all
+kind=level level=info line=2026-11-09T10:27:51.500Z info mixed iso-timestamp 27
+kind=level level=info line=2026-11-09 10:28:16,123 info com.acme.mixed.Service - mixed logback 28
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 29"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 30"
+kind=level level=error line={"log":"mixed docker line 31 with error word","stream":"stdout"}
+kind=level level=warn line=[31mwarn colored keyword line 32[0m
+kind=level level=neutral line=plain neutral chatter 33 carries no level word at all
+kind=level level=info line=2026-11-09T10:34:22.500Z info mixed iso-timestamp 34
+kind=level level=info line=2026-11-09 10:35:05,123 info com.acme.mixed.Service - mixed logback 35
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 36"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 37"
+kind=level level=info line={"log":"mixed docker line 38 with info word","stream":"stdout"}
+kind=level level=warn line=[31mwarn colored keyword line 39[0m
+kind=level level=neutral line=plain neutral chatter 40 carries no level word at all
+kind=level level=neutral line=
+kind=level level=info line=2026-11-09 10:42:54,123 info com.acme.mixed.Service - mixed logback 42
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 43"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 44"
+kind=level level=error line={"log":"mixed docker line 45 with error word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 46[0m
+kind=level level=neutral line=plain neutral chatter 47 carries no level word at all
+kind=level level=info line=2026-11-09T10:48:24.500Z info mixed iso-timestamp 48
+kind=level level=info line=2026-11-09 10:49:43,123 info com.acme.mixed.Service - mixed logback 49
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 50"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 51"
+kind=level level=info line={"log":"mixed docker line 52 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 53[0m
+kind=level level=neutral line=plain neutral chatter 54 carries no level word at all
+kind=level level=info line=2026-11-09T10:55:55.500Z info mixed iso-timestamp 55
+kind=level level=info line=2026-11-09 10:56:32,123 info com.acme.mixed.Service - mixed logback 56
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 57"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 58"
+kind=level level=info line={"log":"mixed docker line 59 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 60[0m
+kind=level level=neutral line=plain neutral chatter 61 carries no level word at all
+kind=level level=info line=2026-11-09T10:02:26.500Z info mixed iso-timestamp 62
+kind=level level=info line=2026-11-09 10:03:21,123 info com.acme.mixed.Service - mixed logback 63
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 64"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 65"
+kind=level level=info line={"log":"mixed docker line 66 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 67[0m
+kind=level level=neutral line=plain neutral chatter 68 carries no level word at all
+kind=level level=info line=2026-11-09T10:09:57.500Z info mixed iso-timestamp 69
+kind=level level=info line=2026-11-09 10:10:10,123 info com.acme.mixed.Service - mixed logback 70
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 71"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 72"
+kind=level level=info line={"log":"mixed docker line 73 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 74[0m
+kind=level level=neutral line=plain neutral chatter 75 carries no level word at all
+kind=level level=info line=2026-11-09T10:16:28.500Z info mixed iso-timestamp 76
+kind=level level=error line=2026-11-09 10:17:59,123 error com.acme.mixed.Service - mixed logback 77
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 78"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 79"
+kind=level level=info line={"log":"mixed docker line 80 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 81[0m
+kind=level level=neutral line=
+kind=level level=info line=2026-11-09T10:23:59.500Z info mixed iso-timestamp 83
+kind=level level=info line=2026-11-09 10:24:48,123 info com.acme.mixed.Service - mixed logback 84
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 85"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 86"
+kind=level level=info line={"log":"mixed docker line 87 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 88[0m
+kind=level level=neutral line=plain neutral chatter 89 carries no level word at all
+kind=level level=warn line=2026-11-09T10:30:30.500Z warn mixed iso-timestamp 90
+kind=level level=info line=2026-11-09 10:31:37,123 info com.acme.mixed.Service - mixed logback 91
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 92"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 93"
+kind=level level=info line={"log":"mixed docker line 94 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 95[0m
+kind=level level=neutral line=plain neutral chatter 96 carries no level word at all
+kind=level level=info line=2026-11-09T10:37:01.500Z info mixed iso-timestamp 97
+kind=level level=error line=2026-11-09 10:38:26,123 error com.acme.mixed.Service - mixed logback 98
+kind=level level=warn line={"level":"warn","logger":"mixed.json","msg":"mixed json 99"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 100"
+kind=level level=info line={"log":"mixed docker line 101 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 102[0m
+kind=level level=neutral line=plain neutral chatter 103 carries no level word at all
+kind=level level=info line=2026-11-09T10:44:32.500Z info mixed iso-timestamp 104
+kind=level level=info line=2026-11-09 10:45:15,123 info com.acme.mixed.Service - mixed logback 105
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 106"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 107"
+kind=level level=info line={"log":"mixed docker line 108 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 109[0m
+kind=level level=neutral line=plain neutral chatter 110 carries no level word at all
+kind=level level=info line=2026-11-09T10:51:03.500Z info mixed iso-timestamp 111
+kind=level level=info line=2026-11-09 10:52:04,123 info com.acme.mixed.Service - mixed logback 112
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 113"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 114"
+kind=level level=info line={"log":"mixed docker line 115 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 116[0m
+kind=level level=neutral line=plain neutral chatter 117 carries no level word at all
+kind=level level=info line=2026-11-09T10:58:34.500Z info mixed iso-timestamp 118
+kind=level level=info line=2026-11-09 10:59:53,123 info com.acme.mixed.Service - mixed logback 119
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 120"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 121"
+kind=level level=info line={"log":"mixed docker line 122 with info word","stream":"stdout"}
+kind=level level=neutral line=
+kind=level level=neutral line=plain neutral chatter 124 carries no level word at all
+kind=level level=info line=2026-11-09T10:05:05.500Z info mixed iso-timestamp 125
+kind=level level=warn line=2026-11-09 10:06:42,123 warn com.acme.mixed.Service - mixed logback 126
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 127"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 128"
+kind=level level=info line={"log":"mixed docker line 129 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 130[0m
+kind=level level=neutral line=plain neutral chatter 131 carries no level word at all
+kind=level level=info line=2026-11-09T10:12:36.500Z info mixed iso-timestamp 132
+kind=level level=info line=2026-11-09 10:13:31,123 info com.acme.mixed.Service - mixed logback 133
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 134"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 135"
+kind=level level=info line={"log":"mixed docker line 136 with info word","stream":"stdout"}
+kind=level level=info line=[31minfo colored keyword line 137[0m
+kind=level level=neutral line=plain neutral chatter 138 carries no level word at all
+kind=level level=warn line=2026-11-09T10:19:07.500Z warn mixed iso-timestamp 139
+kind=level level=info line=2026-11-09 10:20:20,123 info com.acme.mixed.Service - mixed logback 140
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 141"}
+kind=level level=info line=level=info component=mixed msg="mixed logfmt 142"
+kind=level level=info line={"log":"mixed docker line 143 with info word","stream":"stdout"}
+kind=level level=warn line=[31mwarn colored keyword line 144[0m
+kind=level level=neutral line=plain neutral chatter 145 carries no level word at all
+kind=level level=info line=2026-11-09T10:26:38.500Z info mixed iso-timestamp 146
+kind=level level=info line=2026-11-09 10:27:09,123 info com.acme.mixed.Service - mixed logback 147
+kind=level level=info line={"level":"info","logger":"mixed.json","msg":"mixed json 148"}
+kind=level level=error line=level=error component=mixed msg="mixed logfmt 149"
+kind=level level=info line={"log":"mixed docker line 150 with info word","stream":"stdout"}
+kind=engine-stop fadeMs=400

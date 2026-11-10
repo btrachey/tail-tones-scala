@@ -217,6 +217,20 @@ object MediaBed:
 
   private val cache = new ConcurrentHashMap[String, Prepared]()
 
+  /** S14 test seam (docs/spikes/S13.md §H): when set, [[transcode]] creates its
+    * temp dirs under this base instead of the system tmp. Fixes the MainRunSpec
+    * cleanup-assertion race — scanning `java.io.tmpdir` for
+    * `tail-tones-media-*` saw a SIBLING spec's live transcode dir land between
+    * the two snapshots (one-off "temp dirs leaked" FAIL). With an override, the
+    * spec scans its own hermetic directory instead. Production never sets it;
+    * the seam is THREAD-LOCAL — only the thread that calls [[transcode]] (Main
+    * runs validation on the caller thread) sees it, so a spec sets it around
+    * its own `runCli` without affecting sibling suites.
+    */
+  private[tailtones] val tempBaseOverride =
+    new ThreadLocal[os.Path]:
+      override def initialValue(): os.Path = null
+
   /** Observable counter for leak/once-only assertions in specs (how many temp
     * dirs [[transcode]] has created this process).
     */
@@ -460,8 +474,16 @@ object MediaBed:
             installHint(if viaMpg123 then "mpg123 or ffmpeg" else "ffmpeg")
         )
       case Some((exe, isMpg)) =>
+        val base = tempBaseOverride.get() // S14 hermetic-transcode seam
         val dir =
-          try os.temp.dir(prefix = "tail-tones-media-", deleteOnExit = true)
+          try
+            if base != null then
+              os.temp.dir(
+                dir = base,
+                prefix = "tail-tones-media-",
+                deleteOnExit = true
+              )
+            else os.temp.dir(prefix = "tail-tones-media-", deleteOnExit = true)
           catch
             case NonFatal(_) =>
               return Left(

@@ -62,6 +62,8 @@ object Args:
       |  FILE...                read files; require -f to follow   e.g. tail-tones -f app.log
       |
       |  -f, --follow           keep reading as files grow (rotation-aware)
+      |                         multi-file: per-file order guaranteed; across
+      |                         files lines interleave in poll order (S14 §11.3)
       |  -p, --profile NAME     keyword|logback|logfmt|json|docker|auto   (default auto)
       |  -m, --mode NAME        builtin|media|alert-only            (default builtin)
       |      --media PATH       audio file for media mode (mp3/wav/m4a/aac/flac)

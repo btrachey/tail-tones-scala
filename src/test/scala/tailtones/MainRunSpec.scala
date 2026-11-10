@@ -360,19 +360,29 @@ class MainRunSpec extends munit.FunSuite:
     // and Main's finally sweep removes the temp dir.
     val fx = fixturesFromTestDir()
     val mp3 = fx / "sine-440-1s.mp3"
-    val before = tempMediaDirNames()
-    val r = runCli(
-      Seq("-m", "media", "--media", mp3.toString),
-      bytes("ok\n"),
-      mediaPolicy = (_, _) => tailtones.media.MediaBed.Policy.TranscodeAlways
-    )
-    assertEquals(r.exit, 0, r.err)
-    assertEquals(r.out, "ok\n")
-    assertEquals(
-      tempMediaDirNames(),
-      before,
-      "temp dirs leaked past runPipeline"
-    )
+    // S14 (docs/spikes/S13.md §H): transcode into a HERMETIC base instead of
+    // the shared java.io.tmpdir, so a sibling spec's live MediaBed temp dir
+    // can never land between the before/after snapshots (the old one-off
+    // "temp dirs leaked" flake). The seam is thread-local; runCli's media
+    // validation runs transcode on THIS thread.
+    val base = tmp / "media-base"
+    os.makeDir.all(base)
+    tailtones.media.MediaBed.tempBaseOverride.set(base)
+    try
+      val before = tempMediaDirNames()
+      val r = runCli(
+        Seq("-m", "media", "--media", mp3.toString),
+        bytes("ok\n"),
+        mediaPolicy = (_, _) => tailtones.media.MediaBed.Policy.TranscodeAlways
+      )
+      assertEquals(r.exit, 0, r.err)
+      assertEquals(r.out, "ok\n")
+      assertEquals(
+        tempMediaDirNames(),
+        before,
+        "temp dirs leaked past runPipeline"
+      )
+    finally tailtones.media.MediaBed.tempBaseOverride.remove()
   }
 
   test(
@@ -398,7 +408,11 @@ class MainRunSpec extends munit.FunSuite:
 
   private def tempMediaDirNames(): Set[String] =
     try
-      val base = os.Path(System.getProperty("java.io.tmpdir"))
+      // Scan the hermetic base when set (S14, docs/spikes/S13.md §H), else
+      // the shared system tmp (pre-existing behavior).
+      val base = Option(
+        tailtones.media.MediaBed.tempBaseOverride.get()
+      ).getOrElse(os.Path(System.getProperty("java.io.tmpdir")))
       os.list(base)
         .filter(_.last.startsWith("tail-tones-media-"))
         .map(_.last)
