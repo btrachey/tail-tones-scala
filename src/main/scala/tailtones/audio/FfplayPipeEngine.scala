@@ -40,13 +40,20 @@ final class FfplayPipeEngine(
       * stdin and exits 0 on EOF exercises the real-child lifecycle without
       * audio). Production leaves None → [[FfplayPipeEngine.command]].
       */
-    commandOverride: Option[Seq[String]] = None
+    commandOverride: Option[Seq[String]] = None,
+    /** S12: media-bed resolver (plan §6.5 transcode policy); see
+      * [[PipeEngine]]'s parameter of the same name.
+      */
+    bedResolver: Option[
+      BedLoop => Either[String, tailtones.media.MediaBed.Prepared]
+    ] = None
 ) extends PipeEngine(
       cfg,
       warn = warn,
       drainChunkFrames = drainChunkFrames,
       drainSleepMs = drainSleepMs,
-      commandOverride = commandOverride
+      commandOverride = commandOverride,
+      bedResolver = bedResolver
     ):
 
   useSinkOverride(sinkOverride)

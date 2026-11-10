@@ -37,7 +37,18 @@ class MainRunSpec extends munit.FunSuite:
           PrintStream,
           Boolean,
           String => Option[String]
-      ) => tailtones.audio.AudioEngine = MainRunSpec.nullOnAuto
+      ) => tailtones.audio.AudioEngine = MainRunSpec.nullOnAuto,
+      /** S12: specs substitute a NullEngine, so the validation policy must
+        * match (PlayOnly — structural/decodable checks, NEVER shells out to
+        * ffmpeg). The real policy resolution (backend → policy) is pinned by
+        * `MainMediaPolicySpec`; a test exercising the transcode-validation path
+        * passes its own policy here.
+        */
+      mediaPolicy: (
+          tailtones.cfg.Config,
+          String => Option[String]
+      ) => tailtones.media.MediaBed.Policy = (_, _) =>
+        tailtones.media.MediaBed.Policy.PlayOnly
   ): RunResult =
     val outBuf = out match
       case b: ByteArrayOutputStream => b
@@ -51,7 +62,8 @@ class MainRunSpec extends munit.FunSuite:
       out = out,
       err = err,
       openStdin = () => new ByteArrayInputStream(stdinBytes): InputStream,
-      makeEngine = makeEngine
+      makeEngine = makeEngine,
+      mediaPolicy = mediaPolicy
     )
     val code = Main.run(argv, deps, installSignals = false)
     err.flush()
@@ -301,12 +313,97 @@ class MainRunSpec extends munit.FunSuite:
     assert(r.err.contains("media file not found"), r.err)
   }
 
-  test("media mode with an existing file → exit 0 (S12 owns decode checks)") {
-    val bed = fixture("bed.wav", "RIFFjunk") // existence is the S8 gate
+  test("media mode with a decodable WAV → exit 0 (S12 validation passes)") {
+    val bed = tmp / "bed.wav"
+    tailtones.audio.Wav.write(
+      bed,
+      Array.fill(4410)(100.toShort),
+      44100,
+      1,
+      16
+    )
     val r = runCli(Seq("-m", "media", "--media", bed.toString), bytes("ok\n"))
     assertEquals(r.exit, 0)
     assertEquals(r.out, "ok\n")
   }
+
+  test(
+    "media mode with an UNDECODABLE wav → exit 2 + not-decodable stderr (S12)"
+  ) {
+    val bed = fixture("garbage.wav", "RIFFjunk this is not PCM at all")
+    val r = runCli(Seq("-m", "media", "--media", bed.toString), bytes("ok\n"))
+    assertEquals(r.exit, 2)
+    assert(r.err.contains("not decodable"), r.err)
+    assertEquals(r.out, "") // rejected BEFORE any tee output
+  }
+
+  test(
+    "media mode: native format + null backend never requires ffmpeg (PlayOnly)"
+  ) {
+    // §3 headless promise: --backend null with a native media file must run
+    // even when no ffmpeg exists — policy resolution pins this; here we pin
+    // that the in-process path exits 0 with a structural native file.
+    val mp3 = fixture("bed.mp3", "fake but structurally accepted by PlayOnly")
+    val r = runCli(
+      Seq("-m", "media", "--backend", "null", "--media", mp3.toString),
+      bytes("ok\n")
+    )
+    assertEquals(r.exit, 0)
+    assertEquals(r.out, "ok\n")
+  }
+
+  test(
+    "media mode: streaming policy transcodes at startup + cleans temp dirs after run"
+  ) {
+    // Real ffmpeg through the production validation path: TranscodeAlways
+    // validates BEFORE readers (exit 0), the engine resolver is a cache hit,
+    // and Main's finally sweep removes the temp dir.
+    val fx = fixturesFromTestDir()
+    val mp3 = fx / "sine-440-1s.mp3"
+    val before = tempMediaDirNames()
+    val r = runCli(
+      Seq("-m", "media", "--media", mp3.toString),
+      bytes("ok\n"),
+      mediaPolicy = (_, _) => tailtones.media.MediaBed.Policy.TranscodeAlways
+    )
+    assertEquals(r.exit, 0, r.err)
+    assertEquals(r.out, "ok\n")
+    assertEquals(
+      tempMediaDirNames(),
+      before,
+      "temp dirs leaked past runPipeline"
+    )
+  }
+
+  test(
+    "media mode: streaming policy + undecodable file → exit 2 + hint, tee silent"
+  ) {
+    val bad = fixture("bad.mp3", "no mpeg here, only vibes")
+    val r = runCli(
+      Seq("-m", "media", "--media", bad.toString),
+      bytes("ok\n"),
+      mediaPolicy = (_, _) => tailtones.media.MediaBed.Policy.TranscodeAlways
+    )
+    assertEquals(r.exit, 2)
+    assert(r.err.contains("not decodable"), r.err)
+    assert(r.err.contains("ffmpeg"), r.err)
+    assertEquals(r.out, "")
+  }
+
+  private def fixturesFromTestDir(): os.Path =
+    var d = os.pwd
+    while !os.exists(d / "test-fixtures") && d != os.root do d = d / os.up
+    assert(os.exists(d / "test-fixtures"), "test-fixtures/ missing")
+    d / "test-fixtures"
+
+  private def tempMediaDirNames(): Set[String] =
+    try
+      val base = os.Path(System.getProperty("java.io.tmpdir"))
+      os.list(base)
+        .filter(_.last.startsWith("tail-tones-media-"))
+        .map(_.last)
+        .toSet
+    catch case _: Throwable => Set.empty
 
   test("one-shot missing input file → exit 2 naming it") {
     val r = runCli(Seq((tmp / "nope.log").toString))

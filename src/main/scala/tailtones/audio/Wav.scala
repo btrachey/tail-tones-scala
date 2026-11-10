@@ -26,6 +26,13 @@ object Wav:
   ):
     def frameCount: Int = samples.length / channels
 
+    /** Whole-millisecond duration from header math (S12 ping-pong: plan §6.6
+      * "compute file duration from the WAV header"). 0 on a nonsense rate.
+      */
+    def durationMs: Long =
+      if sampleRate <= 0 then 0L
+      else frameCount.toLong * 1000L / sampleRate
+
   private def u16(b: Array[Byte], o: Int): Int =
     (b(o) & 0xff) | ((b(o + 1) & 0xff) << 8)
 

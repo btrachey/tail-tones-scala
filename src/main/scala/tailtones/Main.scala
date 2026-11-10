@@ -15,6 +15,7 @@ import scala.util.control.NonFatal
 import tailtones.audio.{
   AlsaPipeEngine,
   AudioEngine,
+  BedLoop,
   FfplayPipeEngine,
   NullEngine,
   SpawnEngine
@@ -22,6 +23,7 @@ import tailtones.audio.{
 import tailtones.cli.Args
 import tailtones.cfg.{Config, ResolvedConfig}
 import tailtones.io.Source
+import tailtones.media.MediaBed
 import tailtones.model.{Level, Mode}
 import tailtones.parse.Profiles
 import tailtones.sched.Scheduler
@@ -139,7 +141,18 @@ object Main:
           PrintStream,
           Boolean,
           String => Option[String]
-      ) => AudioEngine = (c, e, q, en) => Main.selectEngine(c, e, q, en)
+      ) => AudioEngine = (c, e, q, en) => Main.selectEngine(c, e, q, en),
+      /** S12 seam: the [[tailtones.media.MediaBed.Policy]] startup media
+        * validation runs with. Production resolves it from the backend the
+        * engine selection WILL pick ([[Main.mediaPolicy]]); specs that
+        * substitute `makeEngine` (NullEngine on auto) must substitute the
+        * matching policy too, or validation would judge `--media` against a
+        * backend that never plays.
+        */
+      mediaPolicy: (
+          Config,
+          String => Option[String]
+      ) => MediaBed.Policy = (c, en) => Main.mediaPolicy(c, en)
   )
 
   /** Production scheduler: bridges config → Severity/RateGuard, real clock,
@@ -223,9 +236,14 @@ object Main:
     val cfg = rc.config
     val quiet = rc.quiet || p.quiet
 
-    // §3: missing media file is exit 2 — never a silent downgrade. Existence
-    // only; decodability is S12's startup check. Always printed (errors are
-    // never suppressed by quiet — only diagnostics are).
+    // §3 + S12: media mode files are validated BEFORE any sound, reader
+    // thread, or engine starts: existence (S8, message verbatim) +
+    // decodability (S12): WAVs decode in-process (S1 reader), foreign formats
+    // transcode NOW (one-time startup transcode, plan §6.5 — the engines'
+    // setBedLoop resolver is then a cache hit), missing tool / failed
+    // transcode / corrupt file → stderr + exit 2 ("do not silently
+    // downgrade", §3). Always printed (errors are never suppressed by quiet
+    // — only diagnostics are).
     if cfg.mode == Mode.Media then
       val missing = cfg.media.filter(m => !os.isFile(m))
       if missing.isDefined then
@@ -234,6 +252,17 @@ object Main:
           s"media file not found: ${missing.getOrElse("<none>")} (mode media requires a readable audio file)"
         )
         return 2
+      var mediaBad = false
+      cfg.media.foreach { m =>
+        MediaBed.validate(m, deps.mediaPolicy(cfg, deps.env), deps.env) match
+          case Left(errMsg) =>
+            try MediaBed.cleanupAll()
+            catch case NonFatal(_) => ()
+            errLine(deps.err, errMsg)
+            mediaBad = true
+          case Right(_) => ()
+      }
+      if mediaBad then return 2
 
     // S6 contract: a missing operand is caught BEFORE reader threads start.
     // One-shot (no -f): missing/unreadable file = usage error, exit 2 (a
@@ -243,7 +272,10 @@ object Main:
       p.files.filterNot(os.isFile).foreach { m =>
         errLine(deps.err, s"file not found: $m")
       }
-      if p.files.exists(f => !os.isFile(f)) then return 2
+      if p.files.exists(f => !os.isFile(f)) then
+        try MediaBed.cleanupAll() // media may have transcoded already
+        catch case NonFatal(_) => ()
+        return 2
     else if !quiet then
       p.files.filterNot(os.exists).foreach { m =>
         errLine(deps.err, s"waiting for file: $m")
@@ -359,6 +391,13 @@ object Main:
       if failures.compareAndSet(0, 1) then firstFailure = f
     }
 
+    // S12 temp lifecycle (§6.5): sweep any media temp dirs still cached (the
+    // engines' stop() already released theirs after fade + child teardown;
+    // this covers early-fatal paths where stop never ran). deleteOnExit is
+    // the final backstop for exits this line cannot reach (kill -9).
+    try MediaBed.cleanupAll()
+    catch case NonFatal(_) => ()
+
     if failures.get() != 0 then
       if !quiet then errLine(deps.err, firstFailure)
       1
@@ -407,24 +446,44 @@ object Main:
       osIs: String => Boolean = defaultOsIs
   ): AudioEngine =
     val note = (m: String) => if !quiet then errLine(err, m)
+    // S12 (plan §6.5): the media-bed resolver per backend. MediaBed's cache
+    // makes this a no-op when Main already validated at startup (same
+    // path/size/mtime key), so the transcode truly runs ONCE.
+    def resolverFor(
+        policy: MediaBed.Policy
+    ): Option[BedLoop => Either[String, MediaBed.Prepared]] =
+      if cfg.mode == Mode.Media then
+        Some(b => MediaBed.prepare(b.path, policy, env))
+      else None // builtin/alert-only: engines get the legacy in-process read
     def ffplayEngine(): Option[AudioEngine] =
       FfplayPipeEngine
         .probeFfplay(env)
         .map(exe =>
-          new FfplayPipeEngine(cfg, ffplayPath = exe.toString, warn = note)
+          new FfplayPipeEngine(
+            cfg,
+            ffplayPath = exe.toString,
+            warn = note,
+            bedResolver = resolverFor(MediaBed.Policy.TranscodeAlways)
+          )
         )
     def alsaEngine(): Option[AudioEngine] =
       AlsaPipeEngine
         .probeAplay(env)
         .map(exe =>
-          new AlsaPipeEngine(cfg, aplayPath = exe.toString, warn = note)
+          new AlsaPipeEngine(
+            cfg,
+            aplayPath = exe.toString,
+            warn = note,
+            bedResolver = resolverFor(MediaBed.Policy.TranscodeAlsa)
+          )
         )
     def spawnEngine(): AudioEngine = new SpawnEngine(
       cfg,
       warn = note,
       afplayPath = env("TAIL_TONES_AFPLAY").getOrElse(
         tailtones.audio.SpawnEngine.AfplayPath
-      )
+      ),
+      bedResolver = resolverFor(MediaBed.Policy.NativeFirst)
     )
     def nullWarn(why: String): AudioEngine =
       note(s"backend '$why' unavailable — using 'null' (no sound)")
@@ -472,6 +531,53 @@ object Main:
     case "mac"   => scala.scalanative.runtime.Platform.isMac()
     case "linux" => scala.scalanative.runtime.Platform.isLinux()
     case _       => false
+
+  /** S12: the backend id [[selectEngine]] WILL resolve to — the same chain,
+    * without constructing anything (PATH probes are cheap file checks). Startup
+    * media validation must use the SAME policy as the engine that ends up
+    * playing: validating an mp3 against ffmpeg when `auto` resolves to the null
+    * backend would exit 2 on a run that promised no sound at all (and
+    * validating against PlayOnly when ffplay-pipe will play it would let an
+    * undecodable file through, §3). Kept deliberately parallel to
+    * [[selectEngine]]; [[MainSelectEngineSpec]] pins both against each other.
+    */
+  private[tailtones] def resolvedBackend(
+      cfg: Config,
+      env: String => Option[String],
+      osIs: String => Boolean = defaultOsIs
+  ): String =
+    def hasFfplay = FfplayPipeEngine.probeFfplay(env).isDefined
+    def hasAplay = AlsaPipeEngine.probeAplay(env).isDefined
+    cfg.backend match
+      case "null"        => "null"
+      case "spawn"       => "spawn"
+      case "ffplay-pipe" => if hasFfplay then "ffplay-pipe" else "null"
+      case "alsa-pipe"   => if hasAplay then "alsa-pipe" else "null"
+      case "auto" =>
+        if osIs("mac") then if hasFfplay then "ffplay-pipe" else "spawn"
+        else if osIs("linux") then
+          if hasFfplay then "ffplay-pipe"
+          else if hasAplay then "alsa-pipe"
+          else "null"
+        else "null"
+      case _ => "null" // coreaudio (S15) etc. → warn + NullEngine
+
+  /** S12 (§6.5): which [[tailtones.media.MediaBed.Policy]] the resolved backend
+    * plays media with — ffplay-pipe → ffmpeg transcode, alsa-pipe → mpg123-
+    * preferred transcode, spawn → afplay native (+ffmpeg for ogg), null →
+    * structural acceptance only (PlayOnly; must never require an external
+    * tool).
+    */
+  private[tailtones] def mediaPolicy(
+      cfg: Config,
+      env: String => Option[String],
+      osIs: String => Boolean = defaultOsIs
+  ): MediaBed.Policy =
+    resolvedBackend(cfg, env, osIs) match
+      case "ffplay-pipe" => MediaBed.Policy.TranscodeAlways
+      case "alsa-pipe"   => MediaBed.Policy.TranscodeAlsa
+      case "spawn"       => MediaBed.Policy.NativeFirst
+      case _             => MediaBed.Policy.PlayOnly
 
   /** Startup banner (stderr only): mode/backend/profile/media summary. */
   private def banner(cfg: Config, p: Args.Parsed): String =

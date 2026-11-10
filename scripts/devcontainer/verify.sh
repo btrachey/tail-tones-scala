@@ -167,6 +167,40 @@ else
   tail -40 "$TMP/test.log"
 fi
 
+say "7. S12 media: startup transcode + exit-2-with-hint (Linux §6.5)"
+MP3=test-fixtures/sine-440-1s.mp3
+[ -f "$MP3" ] && pass "fixture mp3 present" || fail "fixture mp3 missing"
+# ffplay-pipe + mp3 → ffmpeg transcode at startup, exit 0, no leak of temp dirs
+"$BIN" --backend ffplay-pipe --mode media --media "$MP3" "$TMP/auto.log" > /dev/null 2> "$TMP/m1.err"
+rc=$?
+[ "$rc" = 0 ] && pass "ffplay-pipe+mp3 transcode exit 0" || fail "media transcode exit $rc: $(tail -2 "$TMP/m1.err")"
+# alsa-pipe + mp3 → mpg123-preferred transcode (mpg123 present → no exit 2)
+"$BIN" --backend alsa-pipe --mode media --media "$MP3" "$TMP/auto.log" > /dev/null 2> "$TMP/m2.err"
+rc=$?
+[ "$rc" = 0 ] && pass "alsa-pipe+mp3 (mpg123) exit 0" || fail "alsa media exit $rc: $(tail -2 "$TMP/m2.err")"
+# hide BOTH transcoders → exit 2 + install hint, never silent
+mkdir -p /tmp/tt-emptybin
+TAIL_TONES_FFMPEG=/no/such/ffmpeg TAIL_TONES_MPG123=/no/such/mpg123 PATH=/tmp/tt-emptybin:/usr/bin:/bin \
+  "$BIN" --backend ffplay-pipe --mode media --media "$MP3" "$TMP/auto.log" > /dev/null 2> "$TMP/m3.err"
+rc=$?
+[ "$rc" = 2 ] && pass "missing transcoder → exit 2" || fail "expected exit 2, got $rc"
+grep -qiE 'ffmpeg|install' "$TMP/m3.err" \
+  && pass "missing transcoder → install hint on stderr" || fail "exit 2 was silent: $(cat "$TMP/m3.err")"
+# undecodable garbage → exit 2 (transcode failure path)
+head -c 4096 /dev/urandom > "$TMP/garb.mp3"
+"$BIN" --backend ffplay-pipe --mode media --media "$TMP/garb.mp3" "$TMP/auto.log" > /dev/null 2> "$TMP/m4.err"
+rc=$?
+[ "$rc" = 2 ] && pass "undecodable media → exit 2" || fail "garbage exit $rc"
+# temp-file lifecycle: runs above add NO tail-tones-media dirs that survive
+# (diff-based: step 6's test binary may legitimately hold live dirs at its
+# JVM-exit; deleteOnExit is NOT reliable in-container, docs/spikes/S12.md)
+leak_before=$(find /tmp -maxdepth 1 -name 'tail-tones-media-*' 2>/dev/null | sort)
+"$BIN" --backend ffplay-pipe --mode media --media "$MP3" "$TMP/auto.log" > /dev/null 2> /dev/null
+"$BIN" --backend alsa-pipe --mode media --media "$MP3" "$TMP/auto.log" > /dev/null 2> /dev/null
+leak_after=$(find /tmp -maxdepth 1 -name 'tail-tones-media-*' 2>/dev/null | sort)
+leak=$(comm -13 <(echo "$leak_before") <(echo "$leak_after") | grep -c . || true)
+[ "$leak" = 0 ] && pass "no media temp-dir leaks after clean runs" || fail "$leak leaked media temp dirs: $(comm -13 <(echo "$leak_before") <(echo "$leak_after"))"
+
 say "RESULT"
 if [ "$FAILS" = 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILURE(S)"; fi
 exit "$FAILS"

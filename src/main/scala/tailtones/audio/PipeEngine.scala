@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 import scala.util.control.NonFatal
 
 import tailtones.cfg.Config
+import tailtones.media.MediaBed
 import tailtones.synth.{
   AlertVoice,
   DissonanceLayers,
@@ -55,7 +56,18 @@ abstract class PipeEngine(
       * stdin and exits 0 on EOF exercises the real-child lifecycle without
       * audio). Production leaves None → [[PipeEngine.defaultCommand]].
       */
-    commandOverride: Option[Seq[String]] = None
+    commandOverride: Option[Seq[String]] = None,
+    /** S12 (plan §6.5): resolve a media spec to a loop-ready WAV before the
+      * in-process read. Production (`Main`) wires
+      * `tailtones.media.MediaBed.validate(_, Policy.TranscodeAlways)` — foreign
+      * formats/rates are ffmpeg-transcoded to 44.1k mono PCM16 at startup, the
+      * transcode itself applies the 5 ms seam crossfade (self-generated loops).
+      * None (spec-constructed engines, builtin mode) \= the S10 behavior: read
+      * the WAV verbatim, warn once on foreign rates.
+      */
+    bedResolver: Option[
+      tailtones.audio.BedLoop => Either[String, MediaBed.Prepared]
+    ] = None
 ) extends AudioEngine
     with ChildOwned:
 
@@ -88,6 +100,10 @@ abstract class PipeEngine(
   @volatile private var transportDead = false
   @volatile private var startupFailureOpt: Option[String] = None
   @volatile private var bedSpec: Option[BedLoop] = None
+  // S12: the MediaBed resolution behind the CURRENT bedPcm (temp dir ownership
+  // + crossfade provenance). Scheduler-thread + main-thread (stop) access;
+  // the mixer only ever reads bedPcm (stale-tolerant, §6.2).
+  @volatile private var bedPrepared: Option[MediaBed.Prepared] = None
   // mixer-thread-owned between reads; setBedLoop (scheduler/main thread) sets
   // the reference BEFORE resetting pos, so the worst race is one repeated
   // frame at a loop boundary — benign (stale-tolerant per §6.2).
@@ -216,27 +232,73 @@ abstract class PipeEngine(
           warnOnce(s"voice render failed: ${e.getClass.getSimpleName}")
 
   def setBedLoop(spec: Option[BedLoop]): Unit =
+    // Release any temp dir owned by the PREVIOUS bed before swapping (§6.5
+    // lifecycle: a re-set while running must not leak the old transcode).
+    bedPrepared.foreach(MediaBed.release)
+    bedPrepared = None
     bedSpec = spec
     bedPcm = spec.flatMap { b =>
-      try
-        val a = Wav.read(b.path)
-        if a.sampleRate != AudioFormat.SampleRate then
-          warnOnce(
-            s"media bed ${b.path}: sample rate ${a.sampleRate} != ${AudioFormat.SampleRate}; bed silent (S12 adds ffmpeg transcode)"
-          )
-          None
-        else
-          Some(
+      val prepared = bedResolver match
+        case Some(resolver) =>
+          resolver(b) match
+            case Right(p) =>
+              bedPrepared = Some(p)
+              Some(p)
+            case Left(msg) =>
+              // Main already validated at startup (exit 2); a failure HERE is
+              // either a file deleted mid-run or a spec-less direct call —
+              // warn once, degrade to silence, never crash the tee (§3).
+              warnOnce(s"media bed ${b.path}: $msg; bed silent")
+              None
+        case None =>
+          // No media machinery: legacy in-process read only (S10 behavior).
+          try
+            val a = Wav.read(b.path)
+            if a.sampleRate != AudioFormat.SampleRate then
+              warnOnce(
+                s"media bed ${b.path}: sample rate ${a.sampleRate} != ${AudioFormat.SampleRate}; bed silent (no transcode wired — media mode should route through MediaBed)"
+              )
+              None
+            else
+              Some(
+                MediaBed.Prepared(
+                  b.path,
+                  b.path,
+                  MediaBed.wavDurationMs(a),
+                  selfGenerated = false,
+                  tempDir = None
+                )
+              )
+          catch
+            case NonFatal(e) =>
+              warnOnce(
+                s"media bed ${b.path}: ${e.getClass.getSimpleName}: ${Option(e.getMessage).getOrElse("")}; bed silent (no transcode wired)"
+              )
+              None
+      prepared.map { p =>
+        try {
+          val a =
+            Wav.read(p.servePath) // already proven decodable by the resolver
+          val mono =
             if a.channels == 2 then
               Pcm.stereoToMono(new PcmBuffer(a.samples, 2))
             else new PcmBuffer(a.samples, 1)
-          )
-      catch
-        case NonFatal(e) =>
-          warnOnce(
-            s"media bed ${b.path}: ${e.getClass.getSimpleName}: ${Option(e.getMessage).getOrElse("")}; bed silent (S12 completes decode)"
-          )
-          None
+          // Loop seam policy (plan §6.5): every loop runs seam-to-seam from
+          // frame 0 (third-party: "acceptable v1"). Self-generated files carry
+          // the baked tail↔head blend (MediaBed.applyLoopCrossfade): the last
+          // xf frames ≈ head[0..xf) faded in, so at the 0-restart the step
+          // last→0 is bounded by the head's own 5 ms evolution, not by the
+          // tail-to-head amplitude jump.
+          Some(mono)
+        } catch {
+          case NonFatal(e) =>
+            // Deleted between validate and read (TOCTOU) — honest once-warn.
+            warnOnce(
+              s"media bed ${p.servePath}: ${e.getClass.getSimpleName} on read; bed silent"
+            )
+            None
+        }
+      }.flatten
     }
     bedPos = 0 // mixer may read a stale pos once — benign (§6.2)
 
@@ -275,6 +337,11 @@ abstract class PipeEngine(
         ()
       }
       registry.killAll(100, 100)
+      // S12 temp lifecycle: release AFTER the fade and child teardown — never
+      // delete a WAV a transport child could still be reading. deleteOnExit
+      // remains the backstop for paths that skip stop().
+      bedPrepared.foreach(MediaBed.release)
+      bedPrepared = None
       ()
 
   /** Shutdown-hook backstop (Main, uncaught-exception path): no fade, kill now.
@@ -371,19 +438,23 @@ abstract class PipeEngine(
         frames(i) = Pcm.scaleSaturating(frames(i), g)
         i += 1
 
-  /** Media bed underflow fill (mixer thread). Seam-to-seam loop per plan §6.5
-    * ("third-party files loop seam-to-seam — acceptable v1"); the 5 ms
-    * crossfade is S12's for self-generated loops.
+  /** Media bed underflow fill (mixer thread). Loops run seam-to-seam over [0,
+    * frameCount) (plan §6.5, "acceptable v1"); self-generated files carry the
+    * baked tail↔head blend so the seam is continuous at the wrap. Partial fills
+    * are fine — the mixer writes `frames` it got and repolls. Scheduler- thread
+    * sets bedPcm before bedPos resets; one stale frame at a swap is benign
+    * (§6.2).
     */
   private def fillBedLoop(dst: Array[Short], max: Int): Int =
     bedPcm match
-      case Some(b) if b.frameCount > 0 && max > 0 =>
-        val n = math.min(max, b.frameCount)
+      case Some(b) if bedPos < b.frameCount && max > 0 =>
+        val n = math.min(max, b.frameCount - bedPos)
         var i = 0
         while i < n do
-          dst(i) = b.data((bedPos + i) % b.frameCount)
+          dst(i) = b.data(bedPos + i)
           i += 1
-        bedPos = (bedPos + n) % b.frameCount
+        bedPos += n
+        if bedPos >= b.frameCount then bedPos = 0
         n
       case _ => 0
 
@@ -407,7 +478,7 @@ object PipeEngine:
   /** PATH-probe helper shared by `probeFfplay` / `probeAplay`: PATH entries
     * from `env`, colon-split, relative entries resolved against cwd.
     */
-  private[audio] def PATHEntries(
+  private[tailtones] def PATHEntries(
       env: String => Option[String]
   ): Seq[os.Path] =
     env("PATH")
@@ -417,6 +488,6 @@ object PipeEngine:
       .filter(_.nonEmpty)
       .map(p => os.Path(p, os.pwd))
 
-  private[audio] def isExecutable(p: os.Path): Boolean =
+  private[tailtones] def isExecutable(p: os.Path): Boolean =
     try os.isFile(p) && p.toIO.canExecute
     catch case NonFatal(_) => false

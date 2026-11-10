@@ -89,6 +89,9 @@ WORKDIR /opt/tail-tones
 COPY build.sbt ./
 COPY project/ ./project/
 COPY src/ ./src/
+# S12: MediaBedSpec + PipeEngineMediaSpec read real fixtures (mp3 + foreign-rate
+# WAVs) and exercise the REAL mpg123/ffmpeg transcode in-container.
+COPY test-fixtures ./test-fixtures
 RUN sbt -batch compile
 
 # S11 acceptance driver (nativeLink + headless + aplay/ffplay smokes); the
