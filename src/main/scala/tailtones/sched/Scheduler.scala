@@ -26,7 +26,20 @@ final case class SchedulerOptions(
       */
     alertMinSeverity: Double = Scheduler.AlertMinSeverityDefault,
     /** Quarter-note spacing for bed voices; default 60000/bed.tempoBpm. */
-    bedIntervalMs: Option[Long] = None
+    bedIntervalMs: Option[Long] = None,
+    /** S13 (§11.2): SIGUSR1 mute gate. While it returns true the scheduler
+      * schedules NO voices at all (bed AND alerts) — tee, classification and
+      * the severity EWMA keep advancing (the pump only silences the ENGINE
+      * side, Main's wrapper), so unmute resumes from the CURRENT severity, not
+      * a cold start. Default: never muted.
+      */
+    muted: () => Boolean = () => false,
+    /** S13 (`--volume` live): runtime master-volume supplier, re-read EVERY
+      * tick (and by `stop`'s final fold), so a change lands with the next
+      * `engine.applyParams` — no restart. Defaults to the static config volume;
+      * `Main` wires an env-re-reading supplier so `TAIL_TONES_VOLUME` is live.
+      */
+    masterVolume: () => Double = () => 0.6
 ):
   require(alertMinSeverity >= 0.0 && alertMinSeverity <= 1.0)
   bedIntervalMs.foreach(ms => require(ms > 0, s"bedIntervalMs > 0, got $ms"))
@@ -66,6 +79,11 @@ final case class SchedulerOptions(
   * `shutdown` (via [[stop]]) flips the run flag, interrupts + joins the thread,
   * folds any late-submitted levels with one final no-voice tick, releases the
   * bed loop, then `engine.stop(fadeoutMs)` — the fade-out contract.
+  *
+  * \==S13 additions== `opts.muted` (SIGUSR1, plan §11.2) suppresses BOTH voice
+  * schedulers while true — mix-tick events keep flowing (severity is never
+  * paused, so unmute resumes at the current severity); `opts.masterVolume`
+  * overrides `MixParams.master` every tick (live `--volume`).
   *
   * \==Modes (§6.3)== The scheduler-side policy is only what derive() cannot
   * express: builtin plays synth bed voices; media plays NONE (the engine gets
@@ -247,27 +265,44 @@ final class Scheduler(
     val s = severity.severity
     val layers = severity.layers
     sevSnapshot = s
-    mixSnapshot = params
+    val live = applyLiveMaster(params)
+    mixSnapshot = live
     layersSnapshot = layers
-    engine.applyParams(params)
+    engine.applyParams(live)
     // Dedup on a quantized key (1e-3): engines still get every applyParams
     // (heartbeat), but the event stream stays readable while severity glides
-    // through decay values.
-    val key = Scheduler.mixKey(s, params)
+    // through decay values. Keyed on the LIVE params: with the default
+    // (static) master supplier this is bit-identical to the S9 contract; with
+    // a live `--volume` change the master move itself re-arms the event so
+    // print-events shows it.
+    val key = Scheduler.mixKey(s, live)
     if lastEmittedMix.contains(key) then ()
     else
       lastEmittedMix = Some(key)
       emit(
         "mix-tick",
-        s"severity=${Scheduler.round6(s)} master=${params.master} " +
+        s"severity=${Scheduler.round6(s)} master=${live.master} " +
           s"bedGain=${params.bedGain} alertGain=${params.alertGain} " +
           s"duck=${params.duck} layers=${layers.layerCount}"
       )
     val now = clock.now()
-    scheduleBed(params, now)
-    scheduleAlerts(s, params)
+    // S13 (§11.2) mute: BOTH voice schedulers gate on opts.muted — bed AND
+    // alerts go silent while the mix keeps evolving (severity/decay/dedup
+    // above are untouched), so unmute resumes at the CURRENT severity. The
+    // tee + classification never route through here (reader threads), so
+    // stdout fidelity is structurally unaffected.
+    if !opts.muted() then
+      scheduleBed(params, now)
+      scheduleAlerts(s, params)
     ticksDone += 1
     nextDeadline += tickMs
+
+  private def applyLiveMaster(p: MixParams): MixParams =
+    val m = opts.masterVolume()
+    val clamped =
+      if m.isNaN || m < 0.0 then 0.0 else if m > 1.0 then 1.0 else m
+    if clamped == p.master.toDouble then p
+    else p.copy(master = clamped.toFloat)
 
   private def scheduleBed(params: MixParams, now: Long): Unit =
     if isBuiltin && params.bedGain > 0f && now >= nextBedMs then
@@ -335,7 +370,7 @@ final class Scheduler(
       // race the join and break golden determinism).
       drain()
       severity.tick()
-      val params = severity.derive()
+      val params = applyLiveMaster(severity.derive())
       sevSnapshot = severity.severity
       mixSnapshot = params
       layersSnapshot = severity.layers

@@ -10,8 +10,8 @@ import scala.collection.mutable
 
 /** S9 acceptance (plan §9): golden event streams for healthy / warn-drift /
   * error-storm under seeded RNG + fake clock; §7.2 invariants; tick cadence;
-  * §6.3 mode policies. Every scenario is driven via `runSync`/`tickOnce` +
-  * the public `awaitDeadline` seam — the injected [[FakeClock]] advances ONLY
+  * §6.3 mode policies. Every scenario is driven via `runSync`/`tickOnce` + the
+  * public `awaitDeadline` seam — the injected [[FakeClock]] advances ONLY
   * through the scheduler's own sleep callback, so fake time lands exactly on
   * tick boundaries and the streams are reproducible (no `Thread.sleep`, ever).
   */
@@ -53,6 +53,7 @@ class SchedulerSpec extends munit.FunSuite:
     /** Prime the engine (bringEngineUp) without running ticks. */
     def prime(): Unit = scheduler.runSync(0)
     def run(n: Int): Unit = scheduler.runSync(n)
+
     /** One production tick + advance the fake clock to the next deadline. */
     def step(): Unit =
       scheduler.tickOnce()
@@ -60,8 +61,10 @@ class SchedulerSpec extends munit.FunSuite:
     def kinds: Vector[String] = events.map(_.kind).toVector
     def fieldEvents(kind: String): Vector[Ev] =
       events.filter(_.kind == kind).toVector
+
     /** Full golden rendering (NullEngine recordings, volatile-free). */
     def recorded: Vector[String] = engine.events
+
     /** The emitted scheduler event stream — the `--print-events` contract
       * (fake-time + kind + fields). This is what S14 goldens diff.
       */
@@ -74,8 +77,7 @@ class SchedulerSpec extends munit.FunSuite:
         e.startsWith("voice ") && !e.contains("wave=saw")
       )
     private val mixRe =
-      """severity=([\d.E-]+) master=([\d.E-]+) bedGain=([\d.E-]+) alertGain=([\d.E-]+) duck=([\d.E-]+) layers=(\d)"""
-        .r
+      """severity=([\d.E-]+) master=([\d.E-]+) bedGain=([\d.E-]+) alertGain=([\d.E-]+) duck=([\d.E-]+) layers=(\d)""".r
     def mixes: Vector[MixParams] = fieldEvents("mix-tick").map { e =>
       val m = mixRe.findFirstMatchIn(e.fields).get
       MixParams(
@@ -254,8 +256,7 @@ class SchedulerSpec extends munit.FunSuite:
       val inWindow = times.count(t => t >= t0 && t < t0 + 1000)
       assert(inWindow <= 7, s"$inWindow starts in window at $t0")
     }
-    for i <- 1 until times.length do
-      assert(times(i) - times(i - 1) >= 150)
+    for i <- 1 until times.length do assert(times(i) - times(i - 1) >= 150)
     starts.foreach { e =>
       val live = "live=(\\d+)".r.findFirstMatchIn(e.fields).get.group(1).toInt
       assert(live <= 3)
@@ -454,15 +455,13 @@ class SchedulerSpec extends munit.FunSuite:
     )
     val a = h.alertStarts.head
     assert(
-      """^source=alert wave=saw freqHz=[\d.E-]+ durMs=180 gain=[\d.E-]+ octave=(-1|0|1) live=\d+$"""
-        .r
+      """^source=alert wave=saw freqHz=[\d.E-]+ durMs=180 gain=[\d.E-]+ octave=(-1|0|1) live=\d+$""".r
         .matches(a.fields),
       a.fields
     )
     val b = h.fieldEvents("voice-start").head
     assert(
-      """^source=bed wave=square midi=\d+ freqHz=[\d.E-]+ durMs=260 gain=[\d.E-]+ detuneCents=-?[\d.E-]+$"""
-        .r
+      """^source=bed wave=square midi=\d+ freqHz=[\d.E-]+ durMs=260 gain=[\d.E-]+ detuneCents=-?[\d.E-]+$""".r
         .matches(b.fields),
       b.fields
     )

@@ -14,9 +14,11 @@ class MediaE2eSpec extends munit.FunSuite:
 
   import scala.concurrent.duration.*
 
-  // The three-backend TERM test legitimately spends 2×15 s join budgets when
-  // the devcontainer reproduces the SIGTERM stall (docs/spikes/S12.md §F);
-  // the 30 s default would time the FINDING recording out.
+  // S12's three-backend TERM probe was PROMOTED to a pinned assertion in
+  // SignalE2eSpec ("TERM bounded-exit contract", S13): voluntary exit ≤5 s +
+  // exit code 0. This suite keeps its media-specific lifecycle tests.
+  // The generous timeout remains for the real-afplay mp3 soak + watchdog
+  // joins under load.
   override def munitTimeout: Duration = 3.minutes
 
   signal.signal(signal.SIGPIPE, signal.SIG_IGN)
@@ -274,75 +276,6 @@ class MediaE2eSpec extends munit.FunSuite:
     )
     recorded.foreach { pid =>
       assert(!pidAlive(pid), s"fake-afplay child $pid survived (orphan!)")
-    }
-  }
-
-  test(
-    "SIGTERM: all three real backends exit after the signal (bounded)"
-  ) {
-    // Supervisor directive: leaked `tail-tones -f` binaries were observed
-    // ignoring SIGTERM (spawn/ffplay-pipe/null, docs/spikes/S12.md "known
-    // issues"). Pin the bounded behavior here; a failure is the FINDING,
-    // recorded — never papered over.
-    val f = tmp / "term.log"
-    os.write.over(f, new String(log(300), "UTF-8") + "\n")
-    Seq("spawn", "ffplay-pipe", "null").foreach { be =>
-      val proc = os
-        .proc(
-          requireBinary().toString,
-          "-f",
-          "--backend",
-          be,
-          "--mode",
-          if be == "null" then "alert-only" else "builtin",
-          f.toString,
-          "-q"
-        )
-        .spawn(
-          cwd = tmp,
-          stdin = os.Pipe,
-          stdout = os.Pipe,
-          stderr = os.Pipe
-        )
-      Thread.sleep(600) // settle: engine started, follow loop polling
-      val t0 = System.currentTimeMillis()
-      try proc.wrapped.destroy()
-      catch case _: Throwable => () // SIGTERM
-      val exited =
-        try proc.join(timeout = 15000)
-        catch case _: Throwable => false
-      val dt = System.currentTimeMillis() - t0
-      // FINDING (docs/spikes/S12.md §F — S13 owns the fix): the devcontainer
-      // full-suite run REPRODUCED the stall — `--backend ffplay-pipe` ignored
-      // SIGTERM for >15 s under 500-test CPU load (exited=false, dt=15104 ms;
-      // spawn/null exited in 0.4 s). macOS host never stalls (<2 s). The stall
-      // is recorded LOUDLY on every run (this line + step-7 WARN in verify.sh)
-      // but does not redden the suite: the hang is S13's defect (signal/stop-
-      // path health), NOT an S12-pinned contract. What IS pinned here, hard:
-      // every process is SIGKILL-reapable and ends TRULY gone (hardReap),
-      // and no SIGTERM path may leak — exactly the discipline that stopped
-      // the 6-hour GB-RSS leakers from being reproduced by the suite itself.
-      println(s"[S12-term-finding] --backend $be exited=$exited dt=${dt}ms")
-      if !exited then
-        try
-          os.write.append(
-            tmp / "term-findings.txt",
-            s"$be ignored SIGTERM ${dt}ms (reaped by SIGKILL)\n"
-          )
-        catch case _: Throwable => ()
-      // Contract pinned HERE: every process is reapable and ends TRULY gone
-      // (hardReap: bounded join → SIGKILL → assert pid gone, returns the code).
-      // If it exited on its own after TERM, the exit code is S13's fade-out
-      // contract (0 or 128+sig); if it HUNG, the code is 137 — OUR SIGKILL,
-      // recorded as the §F finding above; the test still proves reap-ability
-      // + no orphan on BOTH paths.
-      val code = hardReap(proc, 1000)
-      if exited then
-        assert(
-          code == 0 || code == 130 || code == 143 || code == 128,
-          s"--backend $be exited $code after TERM (expected 0 or 128+sig) — see S12.md"
-        )
-      else assertEquals(code, 137, s"--backend $be: expected our SIGKILL (137)")
     }
   }
 

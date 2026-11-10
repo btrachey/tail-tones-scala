@@ -16,32 +16,43 @@ import scala.collection.mutable
 final class NullEngine extends AudioEngine:
 
   private val lock = new Object
-  private val rec = mutable.ArrayBuffer.empty[String]
+
+  /** S13 (§6.1/leak): BOUNDED ring. In production `--backend null -f`,
+    * `applyParams` is called every 20 Hz tick and used to append forever — the
+    * unbounded live-set producer behind the S12 RSS leak (GC cannot free
+    * references the buffer holds). Tests never approach the cap (goldens run ≤
+    * a few hundred ticks); a long-running follow keeps only the most recent
+    * [[NullEngine.RecCap]] records (oldest evicted).
+    */
+  private val rec = mutable.Queue.empty[String]
   @volatile private var stopped = -1
 
-  def start(): Unit =
-    lock.synchronized(rec += "start")
+  private def record(s: String): Unit =
+    lock.synchronized {
+      rec += s
+      while rec.size > NullEngine.RecCap do rec.dequeue()
+    }
+
+  def start(): Unit = record("start")
 
   def applyParams(p: MixParams): Unit =
-    lock.synchronized(rec += NullEngine.paramsLine(p))
+    record(NullEngine.paramsLine(p))
 
   def playVoice(v: Voice): Unit =
-    lock.synchronized(rec += NullEngine.voiceLine(v))
+    record(NullEngine.voiceLine(v))
 
   def setBedLoop(spec: Option[BedLoop]): Unit =
-    lock.synchronized {
-      rec += s"bedloop ${spec.map(b => b.path.toString).getOrElse("none")}"
-    }
+    record(s"bedloop ${spec.map(b => b.path.toString).getOrElse("none")}")
 
   def stop(fadeMs: Int): Unit =
     lock.synchronized {
       stopped = fadeMs
-      rec += s"stop fadeMs=$fadeMs"
+      record(s"stop fadeMs=$fadeMs") // monitors are reentrant
     }
 
   def name: String = "null"
 
-  /** Snapshot of all recorded calls, oldest first, in call order. */
+  /** Snapshot of retained calls, oldest first, in call order (≤ RecCap). */
   def events: Vector[String] = lock.synchronized(rec.toVector)
 
   /** Snapshot filtered to `playVoice` records (`voice ...` lines). */
@@ -52,6 +63,11 @@ final class NullEngine extends AudioEngine:
 
 object NullEngine:
 
+  /** Retention bound for the production recorder (see the class doc): ≥ 10
+    * minutes of mix-ticks at 20 Hz, orders of magnitude above any golden.
+    */
+  val RecCap: Int = 20000
+
   /** Canonical serialization of one mix state — the golden format. Floats are
     * printed with `toFloat`'s shortest-round-trip repr, so goldens pin the
     * exact derivation (no formatting drift between runs or machines).
@@ -61,8 +77,8 @@ object NullEngine:
 
   /** Canonical serialization of one voice descriptor. Bed-vs-alert
     * discrimination lives in the Scheduler's `--print-events` events
-    * (`source=bed|alert`), not here: this is the engine-call record.
-    * Waveform is lower-case to match event id style.
+    * (`source=bed|alert`), not here: this is the engine-call record. Waveform
+    * is lower-case to match event id style.
     */
   def voiceLine(v: Voice): String =
     val wave = v.waveform.toString.toLowerCase

@@ -1,15 +1,5 @@
 package tailtones
 
-import scala.scalanative.posix.{signal, unistd}
-import scala.scalanative.unsafe.{
-  CChar,
-  CFuncPtr1,
-  CInt,
-  Ptr,
-  Zone,
-  alloc,
-  sizeof
-}
 import scala.util.control.NonFatal
 
 import tailtones.audio.{
@@ -17,16 +7,17 @@ import tailtones.audio.{
   AudioEngine,
   BedLoop,
   FfplayPipeEngine,
+  MutingEngine,
   NullEngine,
   SpawnEngine
 }
 import tailtones.cli.Args
-import tailtones.cfg.{Config, ResolvedConfig}
+import tailtones.cfg.{Config, JsonConfig, ResolvedConfig}
 import tailtones.io.Source
 import tailtones.media.MediaBed
 import tailtones.model.{Level, Mode}
 import tailtones.parse.Profiles
-import tailtones.sched.Scheduler
+import tailtones.sched.{Scheduler, SignalPump}
 import tailtones.sev.Clock
 
 import java.io.{
@@ -37,7 +28,11 @@ import java.io.{
   OutputStream,
   PrintStream
 }
-import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
+import java.util.concurrent.atomic.{
+  AtomicBoolean,
+  AtomicInteger,
+  AtomicReference
+}
 
 /** Plan §3 wiring: args → config → sources → tee → exit codes.
   *
@@ -78,15 +73,26 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
   *     gain=<f> detuneCents=<f>` — one bed note on the arpeggio grid
   *   - `kind=alert-start source=alert wave=saw freqHz=<f> durMs=<n> gain=<f>
   *     octave=<-1|0|1> live=<n>` — one granted alert (§7.2) All emitted under
-  *     the tee lock. S14 goldens diff these lines.
+  *     the tee lock. S14 goldens diff these lines. S13 EXTENDS the namespace
+  *     with `kind=mute state=on|off` — one line per SIGUSR1 toggle (§11.2).
   *
-  * ==Signals==
-  * Minimal stop-latch now via posixlib `signal()`: SIGINT/SIGTERM flip the
-  * shared `running` flag, which the follow loop polls — real handlers, no
-  * faking. SIGPIPE is set to SIG_IGN so a closed downstream surfaces as an
-  * IOException from write (exit 1) instead of killing us by signal. S13 owns
-  * formalized signal handling (SIGUSR1 mute toggle, SIGINT fadeout); the seam
-  * is this single `running` flag.
+  * ==Signals (S13)==
+  * [[tailtones.sched.SignalPump]] owns everything signal-shaped: SIGINT +
+  * SIGTERM flip `running` (the follow loop polls it; stop path = reader join —
+  * BOUNDED 8 s — → `scheduler.stop()` fold + fade → `engine.stop(fadeoutMs)` →
+  * exit 0, §3), and SIGUSR1 toggles mute (§11.2, plan open question 2 —
+  * decided: SIGUSR1): bed + alerts go silent (engine-side via
+  * [[tailtones.audio.MutingEngine]]) while tee, classification and severity
+  * keep running; unmute resumes AT THE CURRENT severity. `--volume` is LIVE:
+  * the scheduler re-reads the master gain every tick
+  * ([[Main.defaultMakeScheduler]] — env `TAIL_TONES_VOLUME` then the config
+  * file, mtime-guarded), so a runtime change lands with the next
+  * `engine.applyParams`, no restart. Handlers are installed via the pump AFTER
+  * `addShutdownHook` (S10 §D-3), each paired with `siginterrupt(sig, 1)` (S13
+  * §A: EINTR/IMS stall family), and the pump thread blocks the dispatched
+  * signals (`pthread_sigmask`) — see the SignalPump class docs. SIGPIPE stays
+  * SIG_IGN so a closed downstream surfaces as an IOException from write (exit
+  * 1) instead of killing us by signal.
   *
   * ==S9 wiring==
   * The S9 [[tailtones.sched.Scheduler]] + [[tailtones.audio.AudioEngine]] plug
@@ -131,11 +137,22 @@ object Main:
       out: OutputStream,
       err: PrintStream,
       openStdin: () => InputStream,
+      /** S13 signal seam: production builds the real [[SignalPump]]; unit tests
+        * capture the instance (or substitute their own) and call
+        * `dispatch`/`toggleMute` — fake signals with NO `kill()` and no handler
+        * installation.
+        */
+      makePump: (AtomicBoolean, Boolean => Unit, Boolean) => SignalPump =
+        (r, om, ins) => new SignalPump(r, om, ins),
       makeScheduler: (
           Config,
           AudioEngine,
-          (String, String) => Unit
-      ) => Scheduler = Main.defaultMakeScheduler,
+          (String, String) => Unit,
+          () => Boolean,
+          AtomicReference[Double],
+          Option[os.Path]
+      ) => Scheduler = (c, e, emit, m, v, src) =>
+        Main.defaultMakeScheduler(c, e, emit, m, v, sys.env.get, src),
       makeEngine: (
           Config,
           PrintStream,
@@ -156,14 +173,97 @@ object Main:
   )
 
   /** Production scheduler: bridges config → Severity/RateGuard, real clock,
-    * real sleep.
+    * real sleep. S13: wires the mute gate and the live-master supplier
+    * (`--volume` live — plan §3/§9): highest-precedence-wins, re-read EVERY
+    * tick — `volumeOverride` (test hook / future control), then
+    * `TAIL_TONES_VOLUME` (cheap env read), then the config FILE (mtime- guarded
+    * re-parse; a file that vanishes or breaks mid-run holds the last value,
+    * never the crash). CLI `--volume` still wins: Config.resolve applies CLI
+    * overrides last, and the supplier starts at Double.NaN so a live read only
+    * REPLACES the resolved value when it exists — precedence stays CLI > env >
+    * file > default (§4.3), just evaluated at tick time.
     */
   def defaultMakeScheduler(
       cfg: Config,
       engine: AudioEngine,
-      emit: (String, String) => Unit
+      emit: (String, String) => Unit,
+      muted: () => Boolean = () => false,
+      volumeOverride: AtomicReference[Double] =
+        new AtomicReference[Double](Double.NaN),
+      env: String => Option[String] = sys.env.get,
+      configSource: Option[os.Path] = None
   ): Scheduler =
-    Scheduler.fromConfig(cfg, engine, Clock.system, emit)
+    val base = Config.toSeverityConfig(cfg).masterVolume
+    val live = new LiveMasterVolume(
+      base,
+      env,
+      configSource,
+      () => volumeOverride.get()
+    )
+    Scheduler.fromConfig(
+      cfg,
+      engine,
+      Clock.system,
+      emit,
+      tailtones.sched.SchedulerOptions(
+        muted = muted,
+        masterVolume = () => live.get()
+      )
+    )
+
+  /** S13 live-master state (one per run; read only from the scheduler thread —
+    * no synchronization needed, stale-tolerant even if a second caller appears
+    * (§6.2)). mtime+size gate the file re-read so the 20 Hz path is one env
+    * lookup + two stat fields in the common case.
+    */
+  private final class LiveMasterVolume(
+      base: Double,
+      env: String => Option[String],
+      source: Option[os.Path],
+      overrideRef: () => Double
+  ):
+    private var fileVol = base
+    private var fileMtime = -1L
+    private var fileSize = -1L
+
+    def get(): Double =
+      val o = overrideRef()
+      if !o.isNaN then o
+      else
+        env("TAIL_TONES_VOLUME").flatMap(parseFrac) match
+          case Some(v) => v
+          case None =>
+            source.foreach(refreshFile)
+            fileVol
+
+    private def refreshFile(p: os.Path): Unit =
+      try
+        val st = os.stat(p)
+        if st.mtime.toMillis != fileMtime || st.size != fileSize then
+          fileMtime = st.mtime.toMillis
+          fileSize = st.size
+          // Only the top-level `volume` matters live; a full JsonConfig.parse
+          // would hard-fail (and spam) on unrelated mid-save edits, so this
+          // reads the ONE key and holds the last good value on any error.
+          try
+            // NB: Map.get returns Option[Value]; upickle's ValueOps adds a
+            // Num-ish `numOpt` to EVERY Any, so calling it on the Option
+            // silently yields None (Some(Num) is not a Num). FlatMap into the
+            // Value first (S13 live-volume bug).
+            val v = ujson
+              .read(os.read(p))
+              .objOpt
+              .flatMap(_.get("volume").flatMap(_.numOpt))
+              .filter(d => !d.isNaN && d >= 0.0 && d <= 1.0)
+            v.foreach(fileVol = _)
+          catch case NonFatal(_) => ()
+      catch case NonFatal(_) => () // vanished mid-run: keep the last good value
+
+    private def parseFrac(s: String): Option[Double] =
+      try
+        val d = s.trim.toDouble
+        if d.isNaN || d < 0.0 || d > 1.0 then None else Some(d)
+      catch case NonFatal(_) => None
 
   object RunDeps:
     def prod(): RunDeps = RunDeps(
@@ -285,11 +385,29 @@ object Main:
 
     val tee = new Tee(deps.out, deps.err, p.color, p.printEvents)
 
+    // S13 (§11.2): SIGUSR1 mute state + the signal dispatcher. Unit tests
+    // substitute `makePump` and drive `dispatch`/`toggleMute` (no handlers,
+    // no pump thread); production installs AFTER addShutdownHook
+    // (S10 §D-3) via [[SignalPump.install]].
+    val pump = deps.makePump(
+      running,
+      state =>
+        tee.schedulerEmit("mute", s"state=${if state then "on" else "off"}"),
+      installSignals
+    )
+    val volumeOverride = new AtomicReference[Double](Double.NaN)
+
     if !quiet then errLine(deps.err, banner(cfg, p))
 
     // S9: engine + scheduler. Construction cannot fail for validated configs
     // (SeverityConfig/RateGuardConfig were checked by S3's requires).
-    val engine = selectEngine(cfg, deps.err, quiet, deps.env)
+    // S13: the raw backend sits behind MutingEngine — mute is enforced
+    // engine-side (playVoice dropped + zeroed applyParams) ONCE for every
+    // backend, tee/classification/severity untouched.
+    val engine = new MutingEngine(
+      selectEngine(cfg, deps.err, quiet, deps.env),
+      () => pump.isMuted
+    )
     // §6.6 orphan prevention, third leg (after EOF-stop and the SIGINT/
     // SIGTERM stop latch): shutdown-hook backstop kills transport children
     // (ffplay/afplay) even on an uncaught exception escaping this method.
@@ -309,10 +427,19 @@ object Main:
       case _ => ()
     // MUST come after addShutdownHook: javalib's hook installer overwrites
     // SIGINT/SIGTERM handlers with its own exit(128+sig) (see
-    // [[installStopLatch]]); installing ours last wins the slot while
+    // [[SignalPump.install]]); installing ours last wins the slot while
     // javalib's atexit path keeps the uncaught-exception backstop.
-    if installSignals then installStopLatch(running)
-    val scheduler = deps.makeScheduler(cfg, engine, tee.schedulerEmit)
+    // S13: each install pairs with siginterrupt(RESTART) — the TERM-stall
+    // EINTR family fix (docs/spikes/S13.md §A).
+    if installSignals then pump.install()
+    val scheduler = deps.makeScheduler(
+      cfg,
+      engine,
+      tee.schedulerEmit,
+      () => pump.isMuted,
+      volumeOverride,
+      rc.source
+    )
 
     val sources =
       if p.files.isEmpty then Seq(Source.stdin(open = deps.openStdin))
@@ -377,8 +504,32 @@ object Main:
       // skipping scheduler.stop()/engine.stop() → orphan children + exit 1;
       // docs/spikes/S10.md). The latch is already flipped by the handler;
       // readers exit on their own, this loop just watches.
-      while t.isAlive do tailtones.audio.ChildProcess.joinQuietly(t, 1000)
+      //
+      // S13 TERM-stall fix (docs/spikes/S13.md §A): the watch is BOUNDED —
+      // but ONLY AFTER the stop latch fell. Pre-fix S13 code bounded the
+      // watch unconditionally, which made `-f` self-exit after 8 s with an
+      // alive follow loop (daemon readers cannot keep the JVM-alive-equivalent
+      // open) — pinned against regression by SignalE2eSpec
+      // "follow stays alive past the watch budget". Past the post-stop budget
+      // we stop waiting: daemon reader threads cannot keep the process alive
+      // once main exits (javalib exit runs the shutdown hook, which kills
+      // every child), so the fade + engine.stop below ALWAYS run. (S12 §F:
+      // null-backend processes hung here under container CPU load; a wedged
+      // `Source.run` was invisible.)
+      while t.isAlive && running.get() do
+        tailtones.audio.ChildProcess.joinQuietly(t, 250)
+      val watchBudget = System.currentTimeMillis() + 8000
+      while t.isAlive && System.currentTimeMillis() < watchBudget do
+        tailtones.audio.ChildProcess.joinQuietly(t, 250)
+      if t.isAlive && !quiet then
+        errLine(
+          deps.err,
+          s"reader ${t.getName} still running 8 s after stop — proceeding with fade/teardown"
+        )
     }
+    // S13: retire the signal pump (EOF its read() so the daemon thread ends
+    // instead of lingering until process exit).
+    pump.retire()
     // S9: fold + fade-out after readers are done; never throws (failures are
     // captured on schedulerFailure and reported like reader-thread fatals).
     try scheduler.stop()
@@ -605,72 +756,6 @@ object Main:
           // unreachable: Config.resolve validated the id; defensive anyway.
           val ap = Profiles.newAuto(patterns)
           line => ap.classify(line)
-
-  /** Signal stop-latch: SIGINT/SIGTERM flip `running`; SIGPIPE is ignored so
-    * closed-pipe writes surface as IOException (exit 1), not a signal death.
-    * S13 replaces/extends this (fade-out on SIGINT, SIGUSR1) — the seam is the
-    * `running` flag only.
-    *
-    * Async-signal-safety (docs/spikes/S10.md): the handler must touch NO
-    * managed runtime — the first version called `AtomicBoolean.set` from the
-    * handler and deadlocked the GC when the signal landed mid-collection
-    * (`sample` showed `GC_yield` frames under the handler). The POSIX-safe
-    * idiom is the self-pipe: the handler does exactly one `write()` of a
-    * pre-allocated byte into a pipe (async-signal-safe per IEEE 1003.1), and a
-    * daemon pump thread blocked in `read()` performs the managed flip
-    * off-signal.
-    *
-    * Ordering constraint: MUST be called AFTER `addShutdownHook` (see
-    * [[runPipeline]]) — Scala Native's javalib `Runtime.addShutdownHook`
-    * installs its OWN SIGINT/SIGTERM handlers (Runtime.setupSignalHandler:
-    * runHooks() + exit(128+sig)), so registering ours EARLIER means javalib
-    * overwrites them and Ctrl-C exits 130 without ever running
-    * scheduler.stop()/engine.stop() (no fade, no registry drain — measured
-    * exit=130 with the child engines, exit=0 with null where no hook is
-    * registered). Installing LAST wins the slot; javalib's atexit hook still
-    * covers the uncaught-exception path.
-    */
-  // The C function pointer may not close over locals (Scala Native: UB), so
-  // every value the handler touches is a static field. Buffers live in a
-  // manually-opened Zone that is never closed → process-lifetime; Immix is
-  // non-moving, so the addresses the handler reads stay stable.
-  private given signalZone: Zone = Zone.open()
-  private val pipeFds: Ptr[CInt] = alloc[CInt](2)
-  private val sigByte: Ptr[CChar] = alloc[CChar](1)
-  @volatile private var selfPipeW: CInt = -1
-  @volatile private var selfPipeR: CInt = -1
-  private var signalPump: Thread = null
-
-  private val stopHandler: CFuncPtr1[Int, Unit] =
-    CFuncPtr1.fromScalaFunction { (sig: Int) =>
-      val fd = selfPipeW
-      if fd >= 0 then unistd.write(fd, sigByte, sizeof[CChar])
-      ()
-    }
-
-  private def installStopLatch(running: AtomicBoolean): Unit =
-    if selfPipeW < 0 then
-      if unistd.pipe(pipeFds) == 0 then
-        selfPipeR = pipeFds(0)
-        selfPipeW = pipeFds(1) // publish only once the pair is valid
-        val t = new Thread(() =>
-          var go = true
-          while go do
-            val n = unistd.read(selfPipeR, sigByte, sizeof[CChar])
-            if n <= 0 then go = false // EOF/error at teardown: retire
-            else running.set(false) // managed code, off the signal stack
-          ()
-        )
-        t.setDaemon(true) // process exit need not wait on a blocked read
-        t.setName("tt-signal-pump")
-        signalPump = t
-        t.start()
-      // pipe() failed (fd exhaustion): fall through — handlers still
-      // install, they just no-op, and EOF/SIGTERM-default death still
-      // reaps children via the shutdown hook. Never worse than no-op.
-    signal.signal(signal.SIGINT, stopHandler)
-    signal.signal(signal.SIGTERM, stopHandler)
-    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
   /** Stdout tee + stderr event printer. One instance for the whole run;
     * `write`/`event` lock so multi-file runs never interleave partial lines.

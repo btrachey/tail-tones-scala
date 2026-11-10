@@ -160,7 +160,10 @@ class EngineE2eSpec extends munit.FunSuite:
     val (code, out, _, children) = runFollowing(
       Seq("-f", "--backend", "spawn", f.toString),
       env = Map("TAIL_TONES_AFPLAY" -> fake.toString),
-      settleMs = 1500,
+      // S13: 1.5 s was not enough under full-suite load — the startup WAV
+      // bank pre-render (≈60 files) was still running when TERM landed and
+      // the tee truncated (flaky ComparisonFail on out). 3.5 s of headroom.
+      settleMs = 3500,
       signal = "TERM"
     )
     assertEquals(code, 0, "exit after SIGTERM")
