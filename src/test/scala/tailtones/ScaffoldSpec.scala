@@ -3,8 +3,21 @@ package tailtones
 import java.util.regex.Pattern
 
 class ScaffoldSpec extends munit.FunSuite:
-  test("main class links and runs") {
-    Main.main(Array.empty)
+  test("main class links and runs (--help path, no real stdio)") {
+    // S8: Main.main now runs the full pipeline (stdin + sys.exit) — exercise
+    // the injectable entry point instead of main() from a test binary.
+    val out = new java.io.ByteArrayOutputStream
+    val err = new java.io.PrintStream(out)
+    val deps = Main.RunDeps(
+      cwd = os.pwd,
+      home = os.home,
+      env = _ => None,
+      out = out,
+      err = err,
+      openStdin = () => new java.io.ByteArrayInputStream(Array.emptyByteArray)
+    )
+    assertEquals(Main.run(Seq("--help"), deps), 0)
+    assert(out.toString("UTF-8").contains("Usage: tail-tones"))
   }
 
   test("ujson and os-lib are on the native classpath") {
