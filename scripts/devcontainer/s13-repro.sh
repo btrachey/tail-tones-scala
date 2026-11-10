@@ -55,7 +55,7 @@ while [ "$i" -lt 4 ]; do
 done
 sleep 2
 
-for BE in ffplay-pipe null spawn; do
+for BE in ffplay-pipe null spawn alsa-pipe; do
   MODE=builtin
   [ "$BE" = "null" ] && MODE=alert-only
   mklog "$TMP/$BE.log" 300

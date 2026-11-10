@@ -97,6 +97,7 @@ RUN sbt -batch compile
 # S11 acceptance driver (nativeLink + headless + aplay/ffplay smokes); the
 # default CMD so `docker run --rm tail-tones-dev` IS the verification.
 COPY scripts/devcontainer/verify.sh ./scripts/devcontainer/verify.sh
-RUN chmod +x ./scripts/devcontainer/verify.sh
+COPY scripts/devcontainer/s13-repro.sh ./scripts/devcontainer/s13-repro.sh
+RUN chmod +x ./scripts/devcontainer/verify.sh ./scripts/devcontainer/s13-repro.sh
 
 CMD ["bash", "scripts/devcontainer/verify.sh"]
