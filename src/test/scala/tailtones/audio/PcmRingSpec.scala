@@ -94,7 +94,12 @@ class PcmRingSpec extends munit.FunSuite:
           readTotal += 1
           i += 1
       else if !prod.isAlive then ok = false
-    prod.join(5000)
+      // Cooperative backoff when empty: a lockless busy-spin here starves the
+      // producer of the monitor (S11: flaked under container CPU pressure —
+      // producer never got the lock inside the join budget). The ring's own
+      // contract (§6.7) is the 10 ms drain cadence, which this mirrors.
+      else Thread.sleep(0, 100000)
+    prod.join(15000)
     assert(ok, s"sequence corrupted at frame $readTotal")
     assertEquals(readTotal, total)
   }

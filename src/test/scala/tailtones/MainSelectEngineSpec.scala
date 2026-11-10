@@ -2,7 +2,12 @@ package tailtones
 
 import java.io.{ByteArrayOutputStream, PrintStream}
 
-import tailtones.audio.{FfplayPipeEngine, NullEngine, SpawnEngine}
+import tailtones.audio.{
+  AlsaPipeEngine,
+  FfplayPipeEngine,
+  NullEngine,
+  SpawnEngine
+}
 import tailtones.cfg.Config
 
 /** S10 backend-selection matrix ([[Main.selectEngine]] is the single
@@ -75,9 +80,12 @@ class MainSelectEngineSpec extends munit.FunSuite:
   }
 
   test(
-    "auto on macOS → ffplay-pipe when present, else spawn (never null-silent)"
+    "auto resolves per the linked platform's chain, never silent"
   ) {
-    // This machine builds macOS binaries; Platform.isMac() is link-time true.
+    // The linked binary's platform drives the chain (S11: Linux now has a
+    // real chain too — ffplay-pipe → alsa-pipe → null+warn). Explicit
+    // per-platform branches are pinned in PlatformSelectSpec via the
+    // injectable osIs oracle; this test pins the DEFAULT oracle path.
     val (e, err) = sel("auto")
     if scala.scalanative.runtime.Platform.isMac() then
       assert(
@@ -86,6 +94,18 @@ class MainSelectEngineSpec extends munit.FunSuite:
       )
       if e.isInstanceOf[SpawnEngine] then
         assert(err.contains("ffplay not on PATH"), err)
+    else if scala.scalanative.runtime.Platform.isLinux() then
+      assert(
+        e.isInstanceOf[FfplayPipeEngine] ||
+          e.isInstanceOf[AlsaPipeEngine] ||
+          e.isInstanceOf[NullEngine],
+        e.getClass.getName
+      )
+      // every non-ffplay resolution leaves an honest stderr note
+      if !e.isInstanceOf[FfplayPipeEngine] then
+        assert(err.contains("ffplay not on PATH"), err)
+      if e.isInstanceOf[NullEngine] then
+        assert(err.contains("using 'null'"), err)
     else assert(e.isInstanceOf[NullEngine])
   }
 end MainSelectEngineSpec

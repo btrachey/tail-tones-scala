@@ -12,7 +12,13 @@ import scala.scalanative.unsafe.{
 }
 import scala.util.control.NonFatal
 
-import tailtones.audio.{AudioEngine, FfplayPipeEngine, NullEngine, SpawnEngine}
+import tailtones.audio.{
+  AlsaPipeEngine,
+  AudioEngine,
+  FfplayPipeEngine,
+  NullEngine,
+  SpawnEngine
+}
 import tailtones.cli.Args
 import tailtones.cfg.{Config, ResolvedConfig}
 import tailtones.io.Source
@@ -91,13 +97,16 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
   * `Config.toSeverityConfig` / `toRateGuardConfig` bridge the config. Backend
   * selection ([[Main.selectEngine]]): `null` → `NullEngine`;
   * `ffplay-pipe`/`spawn` build the S10 engines (ffplay behind a PATH probe);
-  * `auto` on macOS → ffplay-pipe, else spawn (afplay), with stderr notes on
-  * every fallback; `auto` on other platforms stays `NullEngine` until S11's
-  * alsa-pipe probe lands; not-yet-implemented ids (`coreaudio|alsa-pipe` on
-  * darwin) warn once on stderr and use `NullEngine` — never silent. S10 also
-  * registers the [[tailtones.audio.ChildOwned]] shutdown-hook backstop for
-  * child-process orphan prevention (§6.6). The `running` AtomicBoolean is the
-  * stop signal S9/S13 share.
+  * `alsa-pipe` builds the S11 engine (aplay behind a PATH probe, Linux); `auto`
+  * on macOS → ffplay-pipe, else spawn (afplay); `auto` on Linux → ffplay-pipe
+  * (ffplay on PATH), else alsa-pipe (aplay on PATH), else `NullEngine` + stderr
+  * warning — with stderr notes on every fallback, never silent
+  * (docs/spikes/S11.md records the ffplay-first ordering vs plan §6.1's
+  * alsa-first draft). Other platforms' `auto` stays `NullEngine`.
+  * Not-yet-implemented ids (`coreaudio`) warn once on stderr and use
+  * `NullEngine`. S10 also registers the [[tailtones.audio.ChildOwned]]
+  * shutdown-hook backstop for child-process orphan prevention (§6.6). The
+  * `running` AtomicBoolean is the stop signal S9/S13 share.
   */
 object Main:
 
@@ -130,7 +139,7 @@ object Main:
           PrintStream,
           Boolean,
           String => Option[String]
-      ) => AudioEngine = Main.selectEngine
+      ) => AudioEngine = (c, e, q, en) => Main.selectEngine(c, e, q, en)
   )
 
   /** Production scheduler: bridges config → Severity/RateGuard, real clock,
@@ -361,18 +370,24 @@ object Main:
     case Mode.Media     => "media"
     case Mode.AlertOnly => "alert-only"
 
-  /** Backend selection (plan §6.1 table, S10 revision — docs/spikes/S10.md):
+  /** Backend selection (plan §6.1 table, S10 revision — docs/spikes/S10.md, S11
+    * Linux revision — docs/spikes/S11.md):
     *   - `null` → NullEngine (always available; `--print-events` backbone).
     *   - `ffplay-pipe` → FfplayPipeEngine if `ffplay` is on PATH (S10 PRIMARY
     *     on macOS: one persistent child, mixer-fed PCM; ~10× lower voice
     *     latency than spawn per S0-D/E + S10 measurements).
     *   - `spawn` → SpawnEngine (§6.6 pre-rendered bank + per-voice afplay).
+    *   - `alsa-pipe` → AlsaPipeEngine if `aplay` is on PATH (S11, Linux).
     *   - `auto` on macOS → ffplay-pipe, falling back to spawn (afplay always
     *     present on macOS), then null — every fallback prints a stderr note
-    *     (never silent, §3). `auto` elsewhere keeps NullEngine until S11 lands
-    *     `alsa-pipe` (Linux probe lives there; darwin cannot verify it).
-    *   - `coreaudio` (S15) / `alsa-pipe` (S11, non-Linux here) → warn once +
-    *     NullEngine, pipeline stays exercisable headless.
+    *     (never silent, §3).
+    *   - `auto` on Linux → ffplay-pipe if `ffplay` (ffmpeg) is on PATH, else
+    *     alsa-pipe if `aplay`, else null + stderr warning. ffplay-first (not
+    *     plan §6.1's alsa-first draft) for cross-OS symmetry with the macOS
+    *     default and measured latency — docs/spikes/S11.md §B. `--backend
+    *     alsa-pipe` always forces this engine.
+    *   - `auto` on other platforms / unknown ids (`coreaudio`, S15) → warn once
+    *     + NullEngine, pipeline stays exercisable headless.
     *
     * Child-owning engines get the shutdown-hook backstop (§6.6; S0 spike C
     * proved hooks run) registered in [[runPipeline]] right after construction —
@@ -383,7 +398,13 @@ object Main:
       cfg: Config,
       err: PrintStream,
       quiet: Boolean,
-      env: String => Option[String] = sys.env.get
+      env: String => Option[String] = sys.env.get,
+      /** Platform oracle — injectable so the Linux/macOS `auto` branches are
+        * testable on either host (tests never claim a platform they didn't ask
+        * for: `auto` here resolves strictly per `osIs`, not the link-time one).
+        * Defaults to javalib's uname-based detection.
+        */
+      osIs: String => Boolean = defaultOsIs
   ): AudioEngine =
     val note = (m: String) => if !quiet then errLine(err, m)
     def ffplayEngine(): Option[AudioEngine] =
@@ -391,6 +412,12 @@ object Main:
         .probeFfplay(env)
         .map(exe =>
           new FfplayPipeEngine(cfg, ffplayPath = exe.toString, warn = note)
+        )
+    def alsaEngine(): Option[AudioEngine] =
+      AlsaPipeEngine
+        .probeAplay(env)
+        .map(exe =>
+          new AlsaPipeEngine(cfg, aplayPath = exe.toString, warn = note)
         )
     def spawnEngine(): AudioEngine = new SpawnEngine(
       cfg,
@@ -406,21 +433,45 @@ object Main:
       case "null" => new NullEngine
       case "ffplay-pipe" =>
         ffplayEngine().getOrElse(nullWarn("ffplay-pipe (ffplay not on PATH)"))
+      case "alsa-pipe" =>
+        alsaEngine().getOrElse(nullWarn("alsa-pipe (aplay not on PATH)"))
       case "spawn" => spawnEngine()
       case "auto" =>
-        if scala.scalanative.runtime.Platform.isMac() then
+        if osIs("mac") then
           ffplayEngine().getOrElse {
             note(
               "auto: ffplay not on PATH — falling back to 'spawn' (afplay; higher latency, see docs/spikes/S10.md)"
             )
             spawnEngine()
           }
-        else new NullEngine // S11: alsa-pipe-or-null on Linux (aplay probe)
+        else if osIs("linux") then
+          ffplayEngine().getOrElse {
+            note(
+              "auto: ffplay not on PATH — trying 'alsa-pipe' (aplay) (docs/spikes/S11.md)"
+            )
+            alsaEngine().getOrElse {
+              note(
+                "auto: neither ffplay (ffmpeg) nor aplay (alsa-utils) on PATH — using 'null' (no sound); install ffmpeg or alsa-utils"
+              )
+              new NullEngine
+            }
+          }
+        else new NullEngine
       case other =>
         note(
-          s"backend '$other' is not implemented yet (S11/S15) — using 'null' (no sound)"
+          s"backend '$other' is not implemented yet (S15) — using 'null' (no sound)"
         )
         new NullEngine
+
+  /** javalib platform oracle: "mac"/"linux" → Boolean. `Platform.isMac/isLinux`
+    * are compile-time constants of the linked binary (docs/spikes/S11.md §B
+    * also verifies `os.name` = uname sysname in native); tests override
+    * [[selectEngine]]'s `osIs` instead.
+    */
+  private[tailtones] def defaultOsIs(kind: String): Boolean = kind match
+    case "mac"   => scala.scalanative.runtime.Platform.isMac()
+    case "linux" => scala.scalanative.runtime.Platform.isLinux()
+    case _       => false
 
   /** Startup banner (stderr only): mode/backend/profile/media summary. */
   private def banner(cfg: Config, p: Args.Parsed): String =

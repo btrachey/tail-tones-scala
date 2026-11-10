@@ -27,7 +27,7 @@ class E2eSpec extends munit.FunSuite:
   @tailrec private def findUp(d: os.Path): Option[os.Path] =
     val cand = d / "target" / "scala-3.3.3" / "tail-tones"
     if os.exists(cand) then Some(cand)
-    else if d == d / os.up then None
+    else if d == os.root then None
     else findUp(d / os.up)
 
   private def binaryPath: Option[os.Path] =
@@ -143,7 +143,11 @@ class E2eSpec extends munit.FunSuite:
     os.write(bad, "{ not json ")
     val (c2, _, e2) = runProc(Seq("--config", bad.toString))
     assertEquals(c2, 2)
-    assert(e2.contains(bad.toString), e2)
+    // S7 names the file in the error; describe() shortens paths under the
+    // process cwd to relative form, so the label is the FULL path on macOS
+    // (tmp under /var != child cwd /private/var/...) and `bad.json` on
+    // Linux (os-lib tmp is the runProc cwd). The basename is the invariant.
+    assert(e2.contains(bad.last) || e2.contains(bad.toString), e2)
     val unk = tmp / "unk.json"
     os.write(unk, """{"nonsense": true}""")
     val (c3, _, e3) = runProc(Seq("--config", unk.toString))

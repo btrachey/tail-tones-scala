@@ -1,0 +1,10 @@
+# The container COPYs sources only — the host's darwin nativeLink artifacts
+# must NEVER enter the image (and the container's own target/ never reaches
+# the host; sources are copied, not mounted). See scripts/devcontainer/Dockerfile.
+target/
+project/target/
+project/project/
+.bsp/
+**/*.class
+out.html
+.git/

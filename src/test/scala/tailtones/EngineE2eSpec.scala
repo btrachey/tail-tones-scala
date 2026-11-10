@@ -23,7 +23,7 @@ class EngineE2eSpec extends munit.FunSuite:
   @tailrec private def findUp(d: os.Path): Option[os.Path] =
     val cand = d / "target" / "scala-3.3.3" / "tail-tones"
     if os.exists(cand) then Some(cand)
-    else if d == d / os.up then None
+    else if d == os.root then None
     else findUp(d / os.up)
 
   private def requireBinary(): os.Path =

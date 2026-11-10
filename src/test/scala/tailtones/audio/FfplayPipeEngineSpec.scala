@@ -1,5 +1,7 @@
 package tailtones.audio
 
+import scala.scalanative.posix.signal
+
 import java.util.concurrent.atomic.AtomicInteger
 
 import tailtones.cfg.Config
@@ -11,6 +13,12 @@ import tailtones.synth.{Alerts, Notes, Waveform}
   * binary is exercised in EngineE2eSpec + the S10 manual run.
   */
 class FfplayPipeEngineSpec extends munit.FunSuite:
+
+  // SIGPIPE must be ignored in every child-writing spec on Scala Native
+  // (Linux killed the test binary with signal 13 when the mixer wrote to a
+  // just-killed fake child's stdin — docs/spikes/S11.md §D; darwin only
+  // survived by suite-ordering luck via E2eSpec's install). Idempotent.
+  signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
   private val tmp = os.temp.dir(prefix = "tt-s10-ffplay")
 
