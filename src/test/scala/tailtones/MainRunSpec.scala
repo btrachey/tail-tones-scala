@@ -164,26 +164,41 @@ class MainRunSpec extends munit.FunSuite:
       runCli(Seq("--print-events", "--backend", "null"), bytes("just text\n"))
     assertEquals(r.exit, 0)
     assertEquals(r.out, "just text\n") // events never touch stdout
-    val ev = r.err.linesIterator.filter(_.startsWith("event ")).toVector
+    val ev =
+      r.err.linesIterator.filter(_.startsWith("event kind=level ")).toVector
     assertEquals(ev.size, 1)
-    assert(ev.head.contains("kind=level "), ev.head)
-    assert(ev.head.contains("seq=1 "), ev.head)
+    assert("seq=\\d+ ".r.findFirstIn(ev.head).isDefined, ev.head)
     assert("t=\\d+ ".r.findFirstIn(ev.head).isDefined, ev.head)
     assert(ev.head.contains("level=neutral "), ev.head)
     assert(ev.head.endsWith("line=just text"), ev.head)
+    // S9 extension: the scheduler thread brackets the stream with engine
+    // lifecycle events on the SAME seq counter.
+    val kinds =
+      r.err.linesIterator
+        .filter(_.startsWith("event "))
+        .map(l => "kind=([\\w-]+)".r.findFirstMatchIn(l).get.group(1))
+        .toVector
+    assertEquals(kinds.head, "engine-start")
+    assertEquals(kinds.last, "engine-stop")
   }
 
-  test("--print-events classifies levels and numbers seq across the run") {
+  test("--print-events classifies levels; seq is global & strictly ordered") {
     val input = "ERROR boom\nWARNING hmm\nINFO up\nDEBUG down\nplain\n"
     val r = runCli(Seq("--print-events", "--backend", "null"), bytes(input))
-    val ev = r.err.linesIterator.filter(_.startsWith("event ")).toVector
+    val ev =
+      r.err.linesIterator.filter(_.startsWith("event kind=level ")).toVector
     assertEquals(ev.size, 5)
     val levels = ev.map(l => "level=(\\w+)".r.findFirstMatchIn(l).get.group(1))
     assertEquals(levels, Vector("error", "warn", "info", "debug", "neutral"))
-    assertEquals(
-      ev.zipWithIndex.map { case (l, i) => l.contains(s"seq=${i + 1} ") },
-      Vector.fill(5)(true)
-    )
+    // seq is ONE counter shared with S9 scheduler events: level seqs must be
+    // strictly increasing, never reused, and interleaved with the lifecycle.
+    val seqs =
+      r.err.linesIterator
+        .filter(_.startsWith("event "))
+        .map(l => "seq=(\\d+)".r.findFirstMatchIn(l).get.group(1).toLong)
+        .toVector
+    assertEquals(seqs, seqs.sorted.distinct)
+    assert(seqs.head == 1L, seqs.toString)
   }
 
   test("--dry-run = print-events + null backend, exit 0") {

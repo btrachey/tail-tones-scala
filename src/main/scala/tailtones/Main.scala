@@ -4,11 +4,14 @@ import scala.scalanative.posix.signal
 import scala.scalanative.unsafe.CFuncPtr1
 import scala.util.control.NonFatal
 
+import tailtones.audio.{AudioEngine, NullEngine}
 import tailtones.cli.Args
 import tailtones.cfg.{Config, ResolvedConfig}
 import tailtones.io.Source
 import tailtones.model.{Level, Mode}
 import tailtones.parse.Profiles
+import tailtones.sched.Scheduler
+import tailtones.sev.Clock
 
 import java.io.{
   FileDescriptor,
@@ -39,17 +42,27 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
   * the write so the `[E]`/`[W]`/`[I]`/`[D]` badge can be prepended (Neutral →
   * no badge); default mode tees first and classifies after (plan §5.4 order).
   *
-  * \==--print-events line format== (stable contract for S9) One line per
-  * classification, on stderr:
+  * \==--print-events line format== (stable contract, S8+S9) One line per
+  * event, on stderr:
   * {{{
-  * event kind=level seq=<n> t=<epochMs> level=<debug|info|warn|error|neutral> line=<raw line>
+  * event kind=<KIND> seq=<n> t=<epochMs> <fields...>
   * }}}
-  * `seq` is a single global counter across all reader threads (starts at 1);
-  * `line=` is ALWAYS the last field (the line may contain spaces). S9 EXTENDS
-  * the `kind=` namespace with voice events (`voice-start`, `voice-stop`,
-  * `alert-start`, `alert-stop`, …) using the same `event kind=… seq=… t=…`
-  * prefix and the same counter — voice events come out of the Scheduler thread.
-  * S14 goldens diff these lines.
+  * `seq` is a single global counter across ALL threads and kinds (starts at
+  * 1); `t=` is record time; the S8 `kind=level` line keeps its exact shape
+  * (`level=<debug|info|warn|error|neutral> line=<raw line>`, `line=` ALWAYS
+  * last because the line may contain spaces). S9 EXTENDS the `kind=` namespace
+  * with the Scheduler-thread events:
+  *   - `kind=engine-start name=<engine>` / `kind=engine-stop fadeMs=<n>`
+  *   - `kind=bedloop path=<p>` (media bed attached) /
+  *     `kind=bedloop path=none` (released at stop)
+  *   - `kind=mix-tick severity=<d> master=<f> bedGain=<f> alertGain=<f>
+  *     duck=<f> layers=<0..3>` — emitted only when (severity, MixParams)
+  *     CHANGED since the last emission (20 Hz dedup; goldens stay small)
+  *   - `kind=voice-start source=bed wave=<w> midi=<n> freqHz=<f> durMs=<n>
+  *     gain=<f> detuneCents=<f>` — one bed note on the arpeggio grid
+  *   - `kind=alert-start source=alert wave=saw freqHz=<f> durMs=<n> gain=<f>
+  *     octave=<-1|0|1> live=<n>` — one granted alert (§7.2)
+  * All emitted under the tee lock. S14 goldens diff these lines.
   *
   * ==Signals==
   * Minimal stop-latch now via posixlib `signal()`: SIGINT/SIGTERM flip the
@@ -59,18 +72,30 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
   * formalized signal handling (SIGUSR1 mute toggle, SIGINT fadeout); the seam
   * is this single `running` flag.
   *
-  * ==S9 seams==
-  * [[RunDeps]] is the injection surface: Scheduler + AudioEngine plug in inside
-  * [[runPipeline]] around the `onLine` classification callback (feed the
-  * Scheduler per line; start/stop/voice events print through the shared
-  * `Tee.event`-style printer) and the thread-join/exit-code tail.
-  * `Config.toSeverityConfig` / `toRateGuardConfig` already bridge the config.
-  * The `running` AtomicBoolean is the stop signal S9/S13 share.
+  * ==S9 wiring==
+  * The S9 [[tailtones.sched.Scheduler]] + [[tailtones.audio.AudioEngine]] plug
+  * in inside [[runPipeline]]: reader threads call `scheduler.submit(level)`
+  * next to `Tee.event` (levels reach `Severity.addEvent` only on the scheduler
+  * thread — S3 single-owner contract); the scheduler thread starts just before
+  * the reader threads and is stopped (join + fade-out `engine.stop`) after the
+  * join. Its events print through `Tee.schedulerEmit` — the SAME seq counter
+  * and lock as `Tee.event`, so `--print-events` goldens stay deterministic.
+  * `Config.toSeverityConfig` / `toRateGuardConfig` bridge the config.
+  * Backend selection ([[Main.selectEngine]]): `null` → `NullEngine`; `auto` →
+  * `NullEngine` on every platform for now (plan §6.1 wants auto→spawn on
+  * macOS / alsa-pipe-or-null on Linux, but S10/S11 own those engines — until
+  * they land, auto maps to null and the banner says so); not-yet-implemented
+  * ids (`spawn|coreaudio|alsa-pipe`) warn once on stderr and use `NullEngine`
+  * — never silent. The `running` AtomicBoolean is the stop signal S9/S13 share.
   */
 object Main:
 
   /** Injectable everything, so tests exercise the full pipeline in-process
     * without touching the real stdin/stdout or the process env.
+    *
+    * `makeScheduler` is the S9 injection seam: tests (or a future embedder)
+    * substitute a scheduler driven by a FakeClock + lockstep sleep; production
+    * uses `Main.defaultMakeScheduler` (real clock, `Thread.sleep`).
     */
   final case class RunDeps(
       cwd: os.Path,
@@ -78,8 +103,20 @@ object Main:
       env: String => Option[String],
       out: OutputStream,
       err: PrintStream,
-      openStdin: () => InputStream
+      openStdin: () => InputStream,
+      makeScheduler: (Config, AudioEngine, (String, String) => Unit) => Scheduler =
+        Main.defaultMakeScheduler
   )
+
+  /** Production scheduler: bridges config → Severity/RateGuard, real clock,
+    * real sleep.
+    */
+  def defaultMakeScheduler(
+      cfg: Config,
+      engine: AudioEngine,
+      emit: (String, String) => Unit
+  ): Scheduler =
+    Scheduler.fromConfig(cfg, engine, Clock.system, emit)
 
   object RunDeps:
     def prod(): RunDeps = RunDeps(
@@ -185,6 +222,11 @@ object Main:
 
     if !quiet then errLine(deps.err, banner(cfg, p))
 
+    // S9: engine + scheduler. Construction cannot fail for validated configs
+    // (SeverityConfig/RateGuardConfig were checked by S3's requires).
+    val engine = selectEngine(cfg, deps.err, quiet)
+    val scheduler = deps.makeScheduler(cfg, engine, tee.schedulerEmit)
+
     val sources =
       if p.files.isEmpty then Seq(Source.stdin(open = deps.openStdin))
       else
@@ -208,11 +250,14 @@ object Main:
             val lvl = classifier(line)
             tee.teeWithBadge(line, lvl)
             tee.event(lvl, line)
+            scheduler.submit(lvl)
         else
           line =>
             // default: raw tee first (§5.4), classification only feeds events.
             tee.teeRaw(line)
-            tee.event(classifier(line), line)
+            val lvl = classifier(line)
+            tee.event(lvl, line)
+            scheduler.submit(lvl)
       val t = new Thread(() =>
         try src.run(onLine, () => running.get())
         catch
@@ -231,10 +276,25 @@ object Main:
       t.setDaemon(true)
       t
     }
+    // Scheduler thread FIRST: tick 1 runs immediately, so a fast EOF still
+    // produces a full engine-start→engine-stop event pair (deterministic
+    // print-events stream); readers may start submitting any time after.
+    scheduler.start()
     threads.foreach(_.start())
     threads.foreach { t =>
       try t.join()
       catch case _: InterruptedException => running.set(false)
+    }
+    // S9: fold + fade-out after readers are done; never throws (failures are
+    // captured on schedulerFailure and reported like reader-thread fatals).
+    try scheduler.stop()
+    catch
+      case NonFatal(e) =>
+        if failures.compareAndSet(0, 1) then
+          firstFailure =
+            s"fatal: scheduler stop: ${e.getClass.getSimpleName}: ${Option(e.getMessage).getOrElse("")}"
+    scheduler.schedulerFailure.foreach { f =>
+      if failures.compareAndSet(0, 1) then firstFailure = f
     }
 
     if failures.get() != 0 then
@@ -247,6 +307,30 @@ object Main:
     case Mode.Builtin   => "builtin"
     case Mode.Media     => "media"
     case Mode.AlertOnly => "alert-only"
+
+  /** Backend selection (plan §6.1 table + S9 scope note). `null` → NullEngine.
+    * `auto` → NullEngine on EVERY platform for now: the plan's auto→spawn
+    * (macOS) / auto→alsa-pipe-or-null (Linux) needs S10/S11's engines, which
+    * do not exist yet — documented, banner still shows the resolved config
+    * value, and S10/S11 flip this one line pair when verified. Unimplemented
+    * explicit ids warn on stderr (never silent) and degrade to NullEngine so
+    * the pipeline stays exercisable headless.
+    */
+  private def selectEngine(
+      cfg: Config,
+      err: PrintStream,
+      quiet: Boolean
+  ): AudioEngine =
+    cfg.backend match
+      case "null" => new NullEngine
+      case "auto" => new NullEngine // S10: spawn on macOS; S11: alsa-pipe on Linux
+      case other =>
+        if !quiet then
+          errLine(
+            err,
+            s"backend '$other' is not implemented yet (S10/S11/S15) — using 'null' (no sound)"
+          )
+        new NullEngine
 
   /** Startup banner (stderr only): mode/backend/profile/media summary. */
   private def banner(cfg: Config, p: Args.Parsed): String =
@@ -346,6 +430,22 @@ object Main:
           err.println(
             s"event kind=level seq=$n t=${System
                 .currentTimeMillis()} level=${level.id} line=$line"
+          )
+          err.flush()
+        }
+
+    /** S9 scheduler-thread events through the SAME seq counter and lock as
+      * `event`, so `--print-events` stays a single deterministic stream
+      * (S14 goldens). `fields` is the kind-specific `k=v` suffix; it must NOT
+      * contain newlines (the scheduler emits one event per line).
+      */
+    def schedulerEmit(kind: String, fields: String): Unit =
+      if printEvents then
+        lock.synchronized {
+          val n = seq.incrementAndGet()
+          err.println(
+            s"event kind=$kind seq=$n t=${System
+                .currentTimeMillis()} $fields"
           )
           err.flush()
         }
