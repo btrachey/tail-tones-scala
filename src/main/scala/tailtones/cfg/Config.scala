@@ -161,9 +161,11 @@ object Config:
   /** Built-in defaults (plan §4.1, verbatim). */
   val Default: Config = Config()
 
-  /** Accepted `backend` values (plan §6.1). */
+  /** Accepted `backend` values (plan §6.1 + S10 promotion of ffplay-pipe,
+    * docs/spikes/S0.md §E / docs/spikes/S10.md).
+    */
   val Backends: Seq[String] =
-    Seq("auto", "null", "spawn", "coreaudio", "alsa-pipe")
+    Seq("auto", "null", "spawn", "ffplay-pipe", "coreaudio", "alsa-pipe")
 
   /** Apply one override layer on top of `base` (per-field; last writer wins).
     * `severityRates` patches (per-level merge), every other field replaces.

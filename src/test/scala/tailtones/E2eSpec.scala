@@ -46,9 +46,15 @@ class E2eSpec extends munit.FunSuite:
   private def runProc(
       args: Seq[String],
       stdin: Option[Array[Byte]] = None,
-      env: Map[String, String] = Map.empty,
+      env: Map[String, String] = Map("TAIL_TONES_BACKEND" -> "null"),
       dir: os.Path = tmp
   ): (Int, Array[Byte], String) =
+    // S10: default env pins backend=null so the S8 tee/exit-code matrix never
+    // pays ffplay/afplay child startup or races audio threads. os-lib merges
+    // this map over the inherited environment (propagateEnv=true default),
+    // so PATH/HOME survive for the child's config discovery. The REAL auto
+    // path (auto→ffplay-pipe→spawn, PATH probes included) is
+    // EngineE2eSpec's job.
     val cmd = requireBinary().toString +: args
     // call() pumps out/err concurrently (no pipe-buffer deadlock) and
     // check=false keeps a nonzero exit a value, not an exception.

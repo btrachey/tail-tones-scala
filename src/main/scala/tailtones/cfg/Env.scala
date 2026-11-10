@@ -14,7 +14,7 @@ import scala.collection.mutable
   * TAIL_TONES_MODE               builtin|media|alert-only
   * TAIL_TONES_MEDIA              path to the media bed file (~ and relative
   *                               paths expand like the config `media` key)
-  * TAIL_TONES_BACKEND            auto|null|spawn|coreaudio|alsa-pipe
+  * TAIL_TONES_BACKEND            auto|null|spawn|ffplay-pipe|coreaudio|alsa-pipe
   * TAIL_TONES_VOLUME             master volume, 0..1
   * TAIL_TONES_FADEOUT_MS         EOF fade-out, ms >= 0
   * TAIL_TONES_SEVERITY_RATES     per-level rates SPEC: `warn=0.5,error=1.5`

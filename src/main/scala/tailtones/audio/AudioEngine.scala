@@ -20,10 +20,13 @@ import tailtones.synth.Waveform
   */
 trait AudioEngine:
   def start(): Unit
+
   /** Called from the scheduler thread at <= 20 Hz with derived mix params. */
   def applyParams(p: MixParams): Unit
   def playVoice(v: Voice): Unit // one-shot bed note / alert blip
-  def setBedLoop(spec: Option[BedLoop]): Unit // media mode loop control; None stops
+  def setBedLoop(
+      spec: Option[BedLoop]
+  ): Unit // media mode loop control; None stops
   def stop(fadeMs: Int): Unit // fade out, release resources, kill children
   def name: String
 
@@ -46,3 +49,12 @@ case class Voice(
   * calls when `mode=media` with a media path present.
   */
 case class BedLoop(path: os.Path)
+
+/** Engines that spawn OS child processes (spawn/ffplay-pipe/alsa-pipe) mix this
+  * in so Main can wire the shutdown-hook backstop (§6.6 orphan prevention)
+  * without the plan-verbatim `AudioEngine` trait growing methods.
+  * `killChildren` must be callable from ANY thread at ANY time (shutdown hook
+  * runs on the JVM/Native exit path), must never throw, and must be idempotent.
+  */
+trait ChildOwned:
+  def killChildren(): Unit

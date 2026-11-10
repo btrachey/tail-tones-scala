@@ -66,7 +66,7 @@ object Args:
       |  -m, --mode NAME        builtin|media|alert-only            (default builtin)
       |      --media PATH       audio file for media mode (mp3/wav/m4a/aac/flac)
       |  -c, --config PATH      JSON config file (discovery rules §4.3)
-      |      --backend NAME     auto|null|spawn|coreaudio|alsa-pipe (default auto)
+      |      --backend NAME     auto|null|spawn|ffplay-pipe|coreaudio|alsa-pipe (default auto)
       |      --volume FLOAT     master volume 0..1 (overrides config)
       |      --ratios SPEC      e.g. debug=0,info=0.05,warn=0.3,error=1
       |      --no-color         never touch bytes (tee stays faithful; default)

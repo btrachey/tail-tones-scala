@@ -14,15 +14,15 @@ import tailtones.synth.{AlertShape, Arpeggiator, DissonanceLayers, Notes}
   * are the plan's; tests override for lockstep driving.
   */
 final case class SchedulerOptions(
-    /** Seed for the bed arpeggiator AND the alert trigger/octave RNG — one
-      * seed makes the whole event stream deterministic (golden streams §8).
+    /** Seed for the bed arpeggiator AND the alert trigger/octave RNG — one seed
+      * makes the whole event stream deterministic (golden streams §8).
       */
     seed: Long = 0L,
-    /** Alert lottery floor: below this severity no trigger draw happens at
-      * all. Deviation from plan §6.4's raw `triggerBase + (1-triggerBase)·S`,
-      * which would fire ~1.5 alerts/s on a healthy 10-info/min log (S≈0.06);
-      * see docs/spikes/S9.md. 0.15 sits above the info/warn trickle steady
-      * state (≈0.06, §7.3 rows 1–2) and below 1-error/min (≈0.19).
+    /** Alert lottery floor: below this severity no trigger draw happens at all.
+      * Deviation from plan §6.4's raw `triggerBase + (1-triggerBase)·S`, which
+      * would fire ~1.5 alerts/s on a healthy 10-info/min log (S≈0.06); see
+      * docs/spikes/S9.md. 0.15 sits above the info/warn trickle steady state
+      * (≈0.06, §7.3 rows 1–2) and below 1-error/min (≈0.19).
       */
     alertMinSeverity: Double = Scheduler.AlertMinSeverityDefault,
     /** Quarter-note spacing for bed voices; default 60000/bed.tempoBpm. */
@@ -31,47 +31,47 @@ final case class SchedulerOptions(
   require(alertMinSeverity >= 0.0 && alertMinSeverity <= 1.0)
   bedIntervalMs.foreach(ms => require(ms > 0, s"bedIntervalMs > 0, got $ms"))
 
-/** Scheduler thread (plan §6.2): owns the 20 Hz tick, severity decay, and
-  * voice scheduling, and is the SOLE caller of [[AudioEngine]] (except
-  * `stop`, which the main thread calls after [[stop]] has joined us).
+/** Scheduler thread (plan §6.2): owns the 20 Hz tick, severity decay, and voice
+  * scheduling, and is the SOLE caller of [[AudioEngine]] (except `stop`, which
+  * the main thread calls after [[stop]] has joined us).
   *
   * ==Thread ownership==
-  *   - Reader threads call [[submit]] only — it pushes onto a lock-guarded
-  *     MPSC queue; `Severity.addEvent` is called exclusively from the
-  *     scheduler thread when the queue is drained (S3 single-owner contract).
+  *   - Reader threads call [[submit]] only — it pushes onto a lock-guarded MPSC
+  *     queue; `Severity.addEvent` is called exclusively from the scheduler
+  *     thread when the queue is drained (S3 single-owner contract).
   *   - The scheduler thread drains → `severity.tick()` → `derive()` →
   *     `engine.applyParams` → bed grid → alert lottery.
   *   - [[lastSeverity]] / [[lastMix]] / [[lastLayers]] are `@volatile`
   *     snapshots for engines that want the current state without touching
   *     `Severity` (§6.2 "stale-tolerant reads").
   *
-  * ==Determinism== One seeded [[scala.util.Random]] ([[opts]].seed) drives the
+  * \==Determinism== One seeded [[scala.util.Random]] ([[opts]].seed) drives the
   * arpeggiator jitter, the per-tick alert trigger draw, and the alert octave
   * draw, in that fixed order per tick. With an injected [[Clock]] + sleep seam
   * the whole stream is reproducible — golden event streams (§8) pin it.
   *
-  * ==Per-tick sequence== (exact order matters for goldens)
-  *   1. drain level queue → `severity.addEvent` each
-  *   2. `severity.tick()` (decay + fold)
-  *   3. `params = severity.derive()`; publish volatiles; `engine.applyParams`
-  *      every tick (engines may treat it as a heartbeat); emit `kind=mix-tick`
-  *      only when (severity, params) changed from the previously emitted state
-  *   4. bed grid: mode Builtin, `bedGain > 0`, and `now >= nextBedMs` →
-  *      arpeggiator step (2 RNG draws) → `engine.playVoice` + `kind=voice-start`
-  *   5. alert lottery: iff `severity >= opts.alertMinSeverity`, one draw vs
-  *      `p = triggerBase + (1-triggerBase)·S` (§6.4); if hit, one octave draw,
-  *      then `rateGuard.tryStartAlert()` (§7.2 gates AFTER the probability);
-  *      on grant `engine.playVoice` + `kind=alert-start`
+  * \==Per-tick sequence== (exact order matters for goldens)
+  *   1. drain level queue → `severity.addEvent` each 2. `severity.tick()`
+  *      (decay + fold) 3. `params = severity.derive()`; publish volatiles;
+  *      `engine.applyParams` every tick (engines may treat it as a heartbeat);
+  *      emit `kind=mix-tick` only when (severity, params) changed from the
+  *      previously emitted state 4. bed grid: mode Builtin, `bedGain > 0`, and
+  *      `now >= nextBedMs` → arpeggiator step (2 RNG draws) →
+  *      `engine.playVoice` + `kind=voice-start` 5. alert lottery: iff `severity
+  *      >= opts.alertMinSeverity`, one draw vs `p = triggerBase +
+  *      (1-triggerBase)·S` (§6.4); if hit, one octave draw, then
+  *      `rateGuard.tryStartAlert()` (§7.2 gates AFTER the probability); on
+  *      grant `engine.playVoice` + `kind=alert-start`
   *
   * `shutdown` (via [[stop]]) flips the run flag, interrupts + joins the thread,
   * folds any late-submitted levels with one final no-voice tick, releases the
   * bed loop, then `engine.stop(fadeoutMs)` — the fade-out contract.
   *
-  * ==Modes (§6.3)== The scheduler-side policy is only what derive() cannot
+  * \==Modes (§6.3)== The scheduler-side policy is only what derive() cannot
   * express: builtin plays synth bed voices; media plays NONE (the engine gets
-  * `setBedLoop(Some(path))` at start — S12 wires real loop control, the seam
-  * is these two calls) and alert-only plays none (derive already forces
-  * `bedGain = 0`, so the bed gate blocks it; alerts get the ×1.25 boost inside
+  * `setBedLoop(Some(path))` at start — S12 wires real loop control, the seam is
+  * these two calls) and alert-only plays none (derive already forces `bedGain =
+  * 0`, so the bed gate blocks it; alerts get the ×1.25 boost inside
   * `Severity.derive` — NOT re-applied here).
   */
 final class Scheduler(
@@ -81,12 +81,12 @@ final class Scheduler(
     val rateGuard: RateGuard,
     val clock: Clock,
     /** `(kind, fields)` → event printer (Main's Tee supplies seq/t under the
-      * tee lock; tests collect into a Vector). Called from the scheduler
-      * thread only.
+      * tee lock; tests collect into a Vector). Called from the scheduler thread
+      * only.
       */
     emit: (String, String) => Unit,
-    /** Sleep seam: production `Thread.sleep`; tests advance a FakeClock so
-      * the loop runs lockstep (no `Thread.sleep` in tests, ever).
+    /** Sleep seam: production `Thread.sleep`; tests advance a FakeClock so the
+      * loop runs lockstep (no `Thread.sleep` in tests, ever).
       */
     sleep: Long => Unit,
     opts: SchedulerOptions = SchedulerOptions()
@@ -151,8 +151,8 @@ final class Scheduler(
   private var bedLoopActive = false
   @volatile private var failure: String = null
 
-  /** Failure message if the tick loop died (reported to stderr by Main;
-    * never silent).
+  /** Failure message if the tick loop died (reported to stderr by Main; never
+    * silent).
     */
   def schedulerFailure: Option[String] = Option(failure)
 
@@ -202,9 +202,9 @@ final class Scheduler(
     catch
       case _: InterruptedException => () // stop() path
       case NonFatal(e) =>
-        failure = s"scheduler: ${e.getClass.getSimpleName}: ${Option(e
-            .getMessage)
-            .getOrElse("")}"
+        failure =
+          s"scheduler: ${e.getClass.getSimpleName}: ${Option(e.getMessage)
+              .getOrElse("")}"
         running.set(false)
 
   private var nextDeadline: Long = 0L
@@ -320,7 +320,13 @@ final class Scheduler(
     if t != null then
       try
         t.interrupt()
-        t.join(2000)
+        // Sleep-poll, never Thread.join: a SIGINT/SIGTERM landing inside
+        // javalib's join monitor wait returns EINTR and 0.5.12 join dies in
+        // its finally-block with IllegalMonitorStateException — and leaves
+        // the monitor broken so the next join parks forever (measured;
+        // docs/spikes/S10.md). A wedged wait here would skip the fold AND
+        // engine.stop() → orphan children (§6.6). 2 s budget.
+        tailtones.audio.ChildProcess.joinQuietly(t, 2000)
       catch case _: InterruptedException => ()
       thread = null
     if broughtUp || t != null then
@@ -364,8 +370,8 @@ object Scheduler:
     */
   val AlertMinSeverityDefault: Double = 0.15
 
-  /** Dedup key for mix-tick emission: severity + all four gains rounded to
-    * 1e-3 and packed. Deterministic (pure integer math on finite doubles).
+  /** Dedup key for mix-tick emission: severity + all four gains rounded to 1e-3
+    * and packed. Deterministic (pure integer math on finite doubles).
     */
   def mixKey(s: Double, p: MixParams): Long =
     def q(v: Double): Long = math.round(v * 1000.0)
@@ -376,15 +382,15 @@ object Scheduler:
     h = h * 31 + q(p.duck.toDouble)
     h
 
-  /** Print-friendly fixed-ish severity for events (6 decimals, trailing
-    * zeros stripped by toString of the divided double).
+  /** Print-friendly fixed-ish severity for events (6 decimals, trailing zeros
+    * stripped by toString of the divided double).
     */
   def round6(v: Double): Double = math.round(v * 1e6) / 1e6
 
-  /** Production construction: bridges S7 config → S3 models (single-owner:
-    * the scheduler thread gets these exclusively), default clock/sleep seams.
-    * `emit` receives `(kind, fields)`; Main supplies the shared
-    * seq/lock/`t=` prefix (S8 contract).
+  /** Production construction: bridges S7 config → S3 models (single-owner: the
+    * scheduler thread gets these exclusively), default clock/sleep seams.
+    * `emit` receives `(kind, fields)`; Main supplies the shared seq/lock/`t=`
+    * prefix (S8 contract).
     */
   def fromConfig(
       config: Config,
@@ -392,8 +398,7 @@ object Scheduler:
       clock: Clock,
       emit: (String, String) => Unit,
       opts: SchedulerOptions = SchedulerOptions(),
-      sleep: Long => Unit = ms =>
-        if ms > 0 then Thread.sleep(ms)
+      sleep: Long => Unit = ms => if ms > 0 then Thread.sleep(ms)
   ): Scheduler =
     val severity = new Severity(
       Config.toSeverityConfig(config),

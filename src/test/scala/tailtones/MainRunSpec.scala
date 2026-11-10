@@ -31,7 +31,13 @@ class MainRunSpec extends munit.FunSuite:
       cwd: os.Path = tmp,
       home: os.Path = tmp,
       env: String => Option[String] = _ => None,
-      out: OutputStream = new ByteArrayOutputStream
+      out: OutputStream = new ByteArrayOutputStream,
+      makeEngine: (
+          tailtones.cfg.Config,
+          PrintStream,
+          Boolean,
+          String => Option[String]
+      ) => tailtones.audio.AudioEngine = MainRunSpec.nullOnAuto
   ): RunResult =
     val outBuf = out match
       case b: ByteArrayOutputStream => b
@@ -44,7 +50,8 @@ class MainRunSpec extends munit.FunSuite:
       env = env,
       out = out,
       err = err,
-      openStdin = () => new ByteArrayInputStream(stdinBytes): InputStream
+      openStdin = () => new ByteArrayInputStream(stdinBytes): InputStream,
+      makeEngine = makeEngine
     )
     val code = Main.run(argv, deps, installSignals = false)
     err.flush()
@@ -364,3 +371,19 @@ class MainRunSpec extends munit.FunSuite:
     assertEquals(r.out, s"${tailtones.cli.Args.VersionString}\n")
     assertEquals(r.err, "")
   }
+end MainRunSpec
+
+object MainRunSpec:
+
+  /** S10 hermeticity: in-process specs must never spawn real ffplay/afplay
+    * children, so every backend resolves to NullEngine here. The real selection
+    * matrix is MainSelectEngineSpec (pure) + EngineE2eSpec (linked binary with
+    * fake transport children).
+    */
+  val nullOnAuto: (
+      tailtones.cfg.Config,
+      java.io.PrintStream,
+      Boolean,
+      String => Option[String]
+  ) => tailtones.audio.AudioEngine =
+    (_, _, _, _) => new tailtones.audio.NullEngine

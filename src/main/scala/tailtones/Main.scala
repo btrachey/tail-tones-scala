@@ -1,10 +1,18 @@
 package tailtones
 
-import scala.scalanative.posix.signal
-import scala.scalanative.unsafe.CFuncPtr1
+import scala.scalanative.posix.{signal, unistd}
+import scala.scalanative.unsafe.{
+  CChar,
+  CFuncPtr1,
+  CInt,
+  Ptr,
+  Zone,
+  alloc,
+  sizeof
+}
 import scala.util.control.NonFatal
 
-import tailtones.audio.{AudioEngine, NullEngine}
+import tailtones.audio.{AudioEngine, FfplayPipeEngine, NullEngine, SpawnEngine}
 import tailtones.cli.Args
 import tailtones.cfg.{Config, ResolvedConfig}
 import tailtones.io.Source
@@ -42,27 +50,27 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
   * the write so the `[E]`/`[W]`/`[I]`/`[D]` badge can be prepended (Neutral →
   * no badge); default mode tees first and classifies after (plan §5.4 order).
   *
-  * \==--print-events line format== (stable contract, S8+S9) One line per
-  * event, on stderr:
+  * \==--print-events line format== (stable contract, S8+S9) One line per event,
+  * on stderr:
   * {{{
   * event kind=<KIND> seq=<n> t=<epochMs> <fields...>
   * }}}
-  * `seq` is a single global counter across ALL threads and kinds (starts at
-  * 1); `t=` is record time; the S8 `kind=level` line keeps its exact shape
+  * `seq` is a single global counter across ALL threads and kinds (starts at 1);
+  * `t=` is record time; the S8 `kind=level` line keeps its exact shape
   * (`level=<debug|info|warn|error|neutral> line=<raw line>`, `line=` ALWAYS
   * last because the line may contain spaces). S9 EXTENDS the `kind=` namespace
   * with the Scheduler-thread events:
   *   - `kind=engine-start name=<engine>` / `kind=engine-stop fadeMs=<n>`
-  *   - `kind=bedloop path=<p>` (media bed attached) /
-  *     `kind=bedloop path=none` (released at stop)
+  *   - `kind=bedloop path=<p>` (media bed attached) / `kind=bedloop path=none`
+  *     (released at stop)
   *   - `kind=mix-tick severity=<d> master=<f> bedGain=<f> alertGain=<f>
   *     duck=<f> layers=<0..3>` — emitted only when (severity, MixParams)
   *     CHANGED since the last emission (20 Hz dedup; goldens stay small)
   *   - `kind=voice-start source=bed wave=<w> midi=<n> freqHz=<f> durMs=<n>
   *     gain=<f> detuneCents=<f>` — one bed note on the arpeggio grid
   *   - `kind=alert-start source=alert wave=saw freqHz=<f> durMs=<n> gain=<f>
-  *     octave=<-1|0|1> live=<n>` — one granted alert (§7.2)
-  * All emitted under the tee lock. S14 goldens diff these lines.
+  *     octave=<-1|0|1> live=<n>` — one granted alert (§7.2) All emitted under
+  *     the tee lock. S14 goldens diff these lines.
   *
   * ==Signals==
   * Minimal stop-latch now via posixlib `signal()`: SIGINT/SIGTERM flip the
@@ -80,13 +88,16 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
   * the reader threads and is stopped (join + fade-out `engine.stop`) after the
   * join. Its events print through `Tee.schedulerEmit` — the SAME seq counter
   * and lock as `Tee.event`, so `--print-events` goldens stay deterministic.
-  * `Config.toSeverityConfig` / `toRateGuardConfig` bridge the config.
-  * Backend selection ([[Main.selectEngine]]): `null` → `NullEngine`; `auto` →
-  * `NullEngine` on every platform for now (plan §6.1 wants auto→spawn on
-  * macOS / alsa-pipe-or-null on Linux, but S10/S11 own those engines — until
-  * they land, auto maps to null and the banner says so); not-yet-implemented
-  * ids (`spawn|coreaudio|alsa-pipe`) warn once on stderr and use `NullEngine`
-  * — never silent. The `running` AtomicBoolean is the stop signal S9/S13 share.
+  * `Config.toSeverityConfig` / `toRateGuardConfig` bridge the config. Backend
+  * selection ([[Main.selectEngine]]): `null` → `NullEngine`;
+  * `ffplay-pipe`/`spawn` build the S10 engines (ffplay behind a PATH probe);
+  * `auto` on macOS → ffplay-pipe, else spawn (afplay), with stderr notes on
+  * every fallback; `auto` on other platforms stays `NullEngine` until S11's
+  * alsa-pipe probe lands; not-yet-implemented ids (`coreaudio|alsa-pipe` on
+  * darwin) warn once on stderr and use `NullEngine` — never silent. S10 also
+  * registers the [[tailtones.audio.ChildOwned]] shutdown-hook backstop for
+  * child-process orphan prevention (§6.6). The `running` AtomicBoolean is the
+  * stop signal S9/S13 share.
   */
 object Main:
 
@@ -96,6 +107,11 @@ object Main:
     * `makeScheduler` is the S9 injection seam: tests (or a future embedder)
     * substitute a scheduler driven by a FakeClock + lockstep sleep; production
     * uses `Main.defaultMakeScheduler` (real clock, `Thread.sleep`).
+    *
+    * `makeEngine` is the S10 injection seam: production resolves the real
+    * backend ([[Main.selectEngine]] — ffplay-pipe/spawn spawn REAL OS children,
+    * which in-process specs must not do); the munit pipeline specs pass a
+    * NullEngine factory for `auto`.
     */
   final case class RunDeps(
       cwd: os.Path,
@@ -104,8 +120,17 @@ object Main:
       out: OutputStream,
       err: PrintStream,
       openStdin: () => InputStream,
-      makeScheduler: (Config, AudioEngine, (String, String) => Unit) => Scheduler =
-        Main.defaultMakeScheduler
+      makeScheduler: (
+          Config,
+          AudioEngine,
+          (String, String) => Unit
+      ) => Scheduler = Main.defaultMakeScheduler,
+      makeEngine: (
+          Config,
+          PrintStream,
+          Boolean,
+          String => Option[String]
+      ) => AudioEngine = Main.selectEngine
   )
 
   /** Production scheduler: bridges config → Severity/RateGuard, real clock,
@@ -216,7 +241,6 @@ object Main:
       }
 
     val running = new AtomicBoolean(true)
-    if installSignals then installStopLatch(running)
 
     val tee = new Tee(deps.out, deps.err, p.color, p.printEvents)
 
@@ -224,7 +248,29 @@ object Main:
 
     // S9: engine + scheduler. Construction cannot fail for validated configs
     // (SeverityConfig/RateGuardConfig were checked by S3's requires).
-    val engine = selectEngine(cfg, deps.err, quiet)
+    val engine = selectEngine(cfg, deps.err, quiet, deps.env)
+    // §6.6 orphan prevention, third leg (after EOF-stop and the SIGINT/
+    // SIGTERM stop latch): shutdown-hook backstop kills transport children
+    // (ffplay/afplay) even on an uncaught exception escaping this method.
+    // S0 spike C proved addShutdownHook runs in the native binary. Only for
+    // real process runs (installSignals), never in-process tests.
+    engine match
+      case owned: tailtones.audio.ChildOwned if installSignals =>
+        try
+          val hook = new Thread(() =>
+            try owned.killChildren()
+            catch case NonFatal(_) => ()
+          )
+          hook.setName("tt-child-killer")
+          Runtime.getRuntime.addShutdownHook(hook)
+        catch
+          case NonFatal(_) => () // javalib surprise → signal path still covers
+      case _ => ()
+    // MUST come after addShutdownHook: javalib's hook installer overwrites
+    // SIGINT/SIGTERM handlers with its own exit(128+sig) (see
+    // [[installStopLatch]]); installing ours last wins the slot while
+    // javalib's atexit path keeps the uncaught-exception backstop.
+    if installSignals then installStopLatch(running)
     val scheduler = deps.makeScheduler(cfg, engine, tee.schedulerEmit)
 
     val sources =
@@ -282,8 +328,15 @@ object Main:
     scheduler.start()
     threads.foreach(_.start())
     threads.foreach { t =>
-      try t.join()
-      catch case _: InterruptedException => running.set(false)
+      // Sleep-poll, never Thread.join: a SIGINT/SIGTERM landing inside
+      // javalib's join monitor wait returns EINTR (signal() installs without
+      // SA_RESTART), and Scala Native 0.5.12's join then dies with
+      // IllegalMonitorStateException — leaving the monitor broken so the
+      // next join parks FOREVER (measured: Ctrl-C wedged main in parkNanos,
+      // skipping scheduler.stop()/engine.stop() → orphan children + exit 1;
+      // docs/spikes/S10.md). The latch is already flipped by the handler;
+      // readers exit on their own, this loop just watches.
+      while t.isAlive do tailtones.audio.ChildProcess.joinQuietly(t, 1000)
     }
     // S9: fold + fade-out after readers are done; never throws (failures are
     // captured on schedulerFailure and reported like reader-thread fatals).
@@ -308,28 +361,65 @@ object Main:
     case Mode.Media     => "media"
     case Mode.AlertOnly => "alert-only"
 
-  /** Backend selection (plan §6.1 table + S9 scope note). `null` → NullEngine.
-    * `auto` → NullEngine on EVERY platform for now: the plan's auto→spawn
-    * (macOS) / auto→alsa-pipe-or-null (Linux) needs S10/S11's engines, which
-    * do not exist yet — documented, banner still shows the resolved config
-    * value, and S10/S11 flip this one line pair when verified. Unimplemented
-    * explicit ids warn on stderr (never silent) and degrade to NullEngine so
-    * the pipeline stays exercisable headless.
+  /** Backend selection (plan §6.1 table, S10 revision — docs/spikes/S10.md):
+    *   - `null` → NullEngine (always available; `--print-events` backbone).
+    *   - `ffplay-pipe` → FfplayPipeEngine if `ffplay` is on PATH (S10 PRIMARY
+    *     on macOS: one persistent child, mixer-fed PCM; ~10× lower voice
+    *     latency than spawn per S0-D/E + S10 measurements).
+    *   - `spawn` → SpawnEngine (§6.6 pre-rendered bank + per-voice afplay).
+    *   - `auto` on macOS → ffplay-pipe, falling back to spawn (afplay always
+    *     present on macOS), then null — every fallback prints a stderr note
+    *     (never silent, §3). `auto` elsewhere keeps NullEngine until S11 lands
+    *     `alsa-pipe` (Linux probe lives there; darwin cannot verify it).
+    *   - `coreaudio` (S15) / `alsa-pipe` (S11, non-Linux here) → warn once +
+    *     NullEngine, pipeline stays exercisable headless.
+    *
+    * Child-owning engines get the shutdown-hook backstop (§6.6; S0 spike C
+    * proved hooks run) registered in [[runPipeline]] right after construction —
+    * the single engine-construction site (S9 handoff: flip `auto` in this one
+    * place).
     */
-  private def selectEngine(
+  private[tailtones] def selectEngine(
       cfg: Config,
       err: PrintStream,
-      quiet: Boolean
+      quiet: Boolean,
+      env: String => Option[String] = sys.env.get
   ): AudioEngine =
+    val note = (m: String) => if !quiet then errLine(err, m)
+    def ffplayEngine(): Option[AudioEngine] =
+      FfplayPipeEngine
+        .probeFfplay(env)
+        .map(exe =>
+          new FfplayPipeEngine(cfg, ffplayPath = exe.toString, warn = note)
+        )
+    def spawnEngine(): AudioEngine = new SpawnEngine(
+      cfg,
+      warn = note,
+      afplayPath = env("TAIL_TONES_AFPLAY").getOrElse(
+        tailtones.audio.SpawnEngine.AfplayPath
+      )
+    )
+    def nullWarn(why: String): AudioEngine =
+      note(s"backend '$why' unavailable — using 'null' (no sound)")
+      new NullEngine
     cfg.backend match
       case "null" => new NullEngine
-      case "auto" => new NullEngine // S10: spawn on macOS; S11: alsa-pipe on Linux
+      case "ffplay-pipe" =>
+        ffplayEngine().getOrElse(nullWarn("ffplay-pipe (ffplay not on PATH)"))
+      case "spawn" => spawnEngine()
+      case "auto" =>
+        if scala.scalanative.runtime.Platform.isMac() then
+          ffplayEngine().getOrElse {
+            note(
+              "auto: ffplay not on PATH — falling back to 'spawn' (afplay; higher latency, see docs/spikes/S10.md)"
+            )
+            spawnEngine()
+          }
+        else new NullEngine // S11: alsa-pipe-or-null on Linux (aplay probe)
       case other =>
-        if !quiet then
-          errLine(
-            err,
-            s"backend '$other' is not implemented yet (S10/S11/S15) — using 'null' (no sound)"
-          )
+        note(
+          s"backend '$other' is not implemented yet (S11/S15) — using 'null' (no sound)"
+        )
         new NullEngine
 
   /** Startup banner (stderr only): mode/backend/profile/media summary. */
@@ -363,19 +453,64 @@ object Main:
     * closed-pipe writes surface as IOException (exit 1), not a signal death.
     * S13 replaces/extends this (fade-out on SIGINT, SIGUSR1) — the seam is the
     * `running` flag only.
+    *
+    * Async-signal-safety (docs/spikes/S10.md): the handler must touch NO
+    * managed runtime — the first version called `AtomicBoolean.set` from the
+    * handler and deadlocked the GC when the signal landed mid-collection
+    * (`sample` showed `GC_yield` frames under the handler). The POSIX-safe
+    * idiom is the self-pipe: the handler does exactly one `write()` of a
+    * pre-allocated byte into a pipe (async-signal-safe per IEEE 1003.1), and a
+    * daemon pump thread blocked in `read()` performs the managed flip
+    * off-signal.
+    *
+    * Ordering constraint: MUST be called AFTER `addShutdownHook` (see
+    * [[runPipeline]]) — Scala Native's javalib `Runtime.addShutdownHook`
+    * installs its OWN SIGINT/SIGTERM handlers (Runtime.setupSignalHandler:
+    * runHooks() + exit(128+sig)), so registering ours EARLIER means javalib
+    * overwrites them and Ctrl-C exits 130 without ever running
+    * scheduler.stop()/engine.stop() (no fade, no registry drain — measured
+    * exit=130 with the child engines, exit=0 with null where no hook is
+    * registered). Installing LAST wins the slot; javalib's atexit hook still
+    * covers the uncaught-exception path.
     */
   // The C function pointer may not close over locals (Scala Native: UB), so
-  // the latch lives in a static field the (statically-owned) handler reads.
-  @volatile private var stopLatch: AtomicBoolean = null
+  // every value the handler touches is a static field. Buffers live in a
+  // manually-opened Zone that is never closed → process-lifetime; Immix is
+  // non-moving, so the addresses the handler reads stay stable.
+  private given signalZone: Zone = Zone.open()
+  private val pipeFds: Ptr[CInt] = alloc[CInt](2)
+  private val sigByte: Ptr[CChar] = alloc[CChar](1)
+  @volatile private var selfPipeW: CInt = -1
+  @volatile private var selfPipeR: CInt = -1
+  private var signalPump: Thread = null
 
   private val stopHandler: CFuncPtr1[Int, Unit] =
     CFuncPtr1.fromScalaFunction { (sig: Int) =>
-      val l = stopLatch
-      if l != null then l.set(false)
+      val fd = selfPipeW
+      if fd >= 0 then unistd.write(fd, sigByte, sizeof[CChar])
+      ()
     }
 
   private def installStopLatch(running: AtomicBoolean): Unit =
-    stopLatch = running // root + publish for the process lifetime
+    if selfPipeW < 0 then
+      if unistd.pipe(pipeFds) == 0 then
+        selfPipeR = pipeFds(0)
+        selfPipeW = pipeFds(1) // publish only once the pair is valid
+        val t = new Thread(() =>
+          var go = true
+          while go do
+            val n = unistd.read(selfPipeR, sigByte, sizeof[CChar])
+            if n <= 0 then go = false // EOF/error at teardown: retire
+            else running.set(false) // managed code, off the signal stack
+          ()
+        )
+        t.setDaemon(true) // process exit need not wait on a blocked read
+        t.setName("tt-signal-pump")
+        signalPump = t
+        t.start()
+      // pipe() failed (fd exhaustion): fall through — handlers still
+      // install, they just no-op, and EOF/SIGTERM-default death still
+      // reaps children via the shutdown hook. Never worse than no-op.
     signal.signal(signal.SIGINT, stopHandler)
     signal.signal(signal.SIGTERM, stopHandler)
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
@@ -435,8 +570,8 @@ object Main:
         }
 
     /** S9 scheduler-thread events through the SAME seq counter and lock as
-      * `event`, so `--print-events` stays a single deterministic stream
-      * (S14 goldens). `fields` is the kind-specific `k=v` suffix; it must NOT
+      * `event`, so `--print-events` stays a single deterministic stream (S14
+      * goldens). `fields` is the kind-specific `k=v` suffix; it must NOT
       * contain newlines (the scheduler emits one event per line).
       */
     def schedulerEmit(kind: String, fields: String): Unit =
