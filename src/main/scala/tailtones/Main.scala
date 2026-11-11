@@ -283,7 +283,8 @@ object Main:
 
   def main(args: Array[String]): Unit =
     // S15 spike entry (docs/spikes/S15.md) — bypasses the CLI: the probe is
-    // developer tooling, like S0's --s0-probe (which predates the real CLI).
+    // developer tooling (S0's --s0-probe equivalent was removed in S16 once
+    // its results were recorded in docs/spikes/S0.md).
     if args.contains("--s15-probe") then
       val secs = args
         .filter(a => a != "--s15-probe")
