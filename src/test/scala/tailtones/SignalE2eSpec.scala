@@ -51,7 +51,7 @@ class SignalE2eSpec extends munit.FunSuite:
     else findUp(d / os.up)
 
   private def requireBinary(): os.Path =
-    sys.props
+    val p = sys.props
       .get("tailtones.binary")
       .map(p => os.Path(p, os.pwd))
       .filter(os.exists)
@@ -61,6 +61,8 @@ class SignalE2eSpec extends munit.FunSuite:
           "linked binary not found — run `sbt nativeLink` first"
         )
       )
+    BinaryGuard.check(p)
+    p
 
   private def pidAlive(pid: Long): Boolean =
     os.exists(os.Path(s"/proc/$pid", os.root)) ||

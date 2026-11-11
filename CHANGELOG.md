@@ -99,6 +99,29 @@ self-contained native binary, no JVM at runtime, no Java audio libraries.
 - `scripts/install.sh` (S16): copies the linked binary to `~/.local/bin`
   (timestamped backup instead of silent overwrite, exec-bit check, PATH hint).
 
+### Intentional deviations from `IMPLEMENTATION_PLAN.md`
+
+The plan predates the code; each amendment below is a measured decision with
+its evidence in the cited spike (see README → "Differences from the
+implementation plan" for the full table):
+
+- **Alert floor** (S9 §A): the §6.4 per-tick lottery is skipped below severity
+  `alertMinSeverity = 0.15` — the raw formula paced ~1.5 saw blips/s on a
+  perfectly healthy 10-info/min log, contradicting §7.3 row 1. Constructor-
+  overridable; `0.0` restores the plan formula verbatim.
+- **Linux `auto` ladder** (S11 §B): `ffplay-pipe` → `alsa-pipe` → `null`,
+  instead of §6.1's alsa-pipe-first draft (S0-E's promotion bar met; cross-OS
+  symmetry). `--backend alsa-pipe` still forces the aplay engine.
+- **Coreaudio latency method** (S15 §D): `AudioQueueBufferRef.mPacketStartTime`
+  does not exist in the macOS SDK, so latency uses the documented equivalent
+  `done − fill − bufferDuration` (mach time, sampled at refill).
+- **Coreaudio ring sizing** (S15 §B/§G): 5 × 441-frame (10 ms) buffers, not
+  §6.7's 4×4410 (100 ms) — 100 ms buffers cannot meet the 50 ms latency budget,
+  and the plan-era callback-rate estimate was arithmetically wrong (10 ms
+  buffers ⇒ ~100 callbacks/s, soak-measured 100.0/s).
+- **Neutral lines** (S14 §E.1): plan §11.1 resolved as keep-strict-silent — no
+  liveliness trickle; `severity.rates.neutral` remains as the tuning knob.
+
 ### Fixed during the release (regressions found & killed in-slice)
 
 - **SIGTERM stalls** (S12 §F → S13 §A): follow-mode processes could ignore

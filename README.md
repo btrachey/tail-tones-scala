@@ -295,6 +295,21 @@ tail-tones --backend alsa-pipe </dev/null; echo "exit=$?"
 TAIL_TONES_COREAUDIO=0 TAIL_TONES_FFPLAY=/no/such tail-tones </dev/null; echo "exit=$?"
 ```
 
+## Differences from the implementation plan
+
+`IMPLEMENTATION_PLAN.md` predates the code; where shipped behavior amends it,
+the measured rationale lives in `docs/spikes/`. These are intentional
+amendments decided from measurements, not regressions — the full record is in
+the cited spike sections:
+
+| Area | Plan said | Shipped | Why / source |
+|---|---|---|---|
+| Alert trigger floor | §6.4: alert drawn each tick with probability `triggerBase + (1−triggerBase)·severity`, no floor | same lottery, skipped entirely below severity `0.15` (`SchedulerOptions.alertMinSeverity`, constructor-overridable — `0.0` restores the raw formula) | the raw formula drew ≈3.1 asks/s at the §7.3 row-1 healthy state (10 info/min, S≈0.06); the §7.2 guard paces them to ≈1.5 saw blips/s forever, contradicting "calm consonant bed, no alerts". The floor keeps rows 1–2 silent and keeps row 5 alerting (1 error/min, S≈0.19). [`docs/spikes/S9.md` §A] |
+| Linux `auto` ladder | §6.1: alsa-pipe if `aplay` on PATH, else null | `ffplay-pipe` → `alsa-pipe` → `null` + stderr install hint | ffplay-pipe met S0-E's promotion bar (buffer paid once; ffplay's internal buffering absorbs mixer jitter where aplay's blocking `write()` backpressures the mixer), giving Linux the same engine macOS measures good; `--backend alsa-pipe` still forces the aplay engine. [`docs/spikes/S11.md` §B] |
+| Coreaudio latency measurement | §9 S15 row: latency ≤ 50 ms; the planning notes assumed the AudioQueue buffer's `mPacketStartTime` field | that field does not exist in the macOS SDK (iOS-only struct variant); latency is measured with the documented equivalent `done − fill − bufferDuration` in the mach-time domain, sampled at every mixer refill — steady-state max 40.6 ms (budget 50 ms) | the completion callback fires when the device has finished consuming a buffer, so device-start ≈ done − bufferDuration. [`docs/spikes/S15.md` §D] |
+| Coreaudio ring sizing | §6.7: pre-allocated ring 4×4410 samples (~400 ms) | 5 buffers × 441 frames (10 ms each, 50 ms on-device, ≈100 callbacks/s) | S15 §B corrected the callback-rate arithmetic first written down against the plan's sizing (4410 frames at 44.1 kHz is 100 ms ⇒ 10 callbacks/s, not ≈24), and steady latency is ≈ (depth−1)×bufferDuration — 100 ms buffers sit far outside the 50 ms budget; the soak chose depth 5 (40.6 ms; depth 6 read 51.3 ms). [`docs/spikes/S15.md` §B/§G] |
+| Neutral-line liveliness | §11.1 open question: strictly silent, or a tiny (~0.01) "bed liveliness" rate? | resolved: strictly silent — no liveliness trickle; `severity.rates.neutral` stays available as the tuning knob (default 0) | a trickle would tie severity — and every event golden — to how much unlevelled chatter the user pipes in; no "too quiet a bed" evidence exists (the bed is time-driven, not traffic-driven). [`docs/spikes/S14.md` §E.1] |
+
 ## Troubleshooting
 
 **"I hear nothing."** Check three things, all on stderr:
@@ -336,6 +351,7 @@ exits 1 with a stderr note rather than dying on SIGPIPE.
 | `TAILTONES_SKIP_PERF=1` | `sbt test` — opt out of the storm perf gate (default ON on dev hosts) |
 | `TAILTONES_REFRESH_GOLDENS=1` | `sbt test` — rewrite event goldens through the sanctioned normalization |
 | `TAILTONES_DUMP_GOLDENS=1` | `sbt test` — dump SchedulerSpec's fake-clock golden stream for inspection |
+| `TAILTONES_ALLOW_STALE_BINARY=1` | `sbt test` — demote the e2e binary-staleness guard (binary older than `src/main` build inputs) from failure to stderr warning; intended for intentionally prebuilt binaries — normally just run `sbt nativeLink` |
 | `TAILTONES_FIXTURE_SEED` | `scripts/gen-logs.sh` — seeded fixture bytes (default 1337) |
 | `TAIL_TONES_BIN` / `TAILTONES_BINARY` | `scripts/verify-audio.sh` / `scripts/refresh-goldens.sh` — binary path |
 | `AUTO_LISTEN` | `scripts/verify-audio.sh --auto` — per-step listen window seconds (default 6) |

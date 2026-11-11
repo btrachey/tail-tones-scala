@@ -83,7 +83,7 @@ class FixtureE2eSpec extends munit.FunSuite:
     else findBinaryUp(d / os.up)
 
   private def requireBinary(): os.Path =
-    sys.props
+    val p = sys.props
       .get("tailtones.binary")
       .map(p => os.Path(p, os.pwd))
       .filter(os.exists)
@@ -94,6 +94,8 @@ class FixtureE2eSpec extends munit.FunSuite:
             "(or -Dtailtones.binary=<path>)"
         )
       )
+    BinaryGuard.check(p)
+    p
 
   private val tmp = os.temp.dir(prefix = "tt-s14-fix")
 

@@ -36,7 +36,7 @@ class MediaE2eSpec extends munit.FunSuite:
     else findUp(d / os.up)
 
   private def requireBinary(): os.Path =
-    sys.props
+    val p = sys.props
       .get("tailtones.binary")
       .map(p => os.Path(p, os.pwd))
       .filter(os.exists)
@@ -46,6 +46,8 @@ class MediaE2eSpec extends munit.FunSuite:
           "linked binary not found — run `sbt nativeLink` first"
         )
       )
+    BinaryGuard.check(p)
+    p
 
   private def fixtures(): os.Path =
     var d = os.pwd

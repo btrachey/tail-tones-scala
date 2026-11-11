@@ -36,12 +36,14 @@ class E2eSpec extends munit.FunSuite:
     fromProp.filter(os.exists).orElse(findUp(os.pwd))
 
   private def requireBinary(): os.Path =
-    binaryPath.getOrElse(
+    val p = binaryPath.getOrElse(
       throw new AssertionError(
         "linked binary not found — run `sbt nativeLink` first " +
           "(or pass -Dtailtones.binary=<path>)"
       )
     )
+    BinaryGuard.check(p)
+    p
 
   private def runProc(
       args: Seq[String],
