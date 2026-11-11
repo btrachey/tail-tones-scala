@@ -343,7 +343,7 @@ final class CoreAudioEngine(
         if fill > 0 && done > 0 && done >= fill then
           val bufferNs =
             (bufferFrames.toDouble / AudioFormat.SampleRate * 1e9).toLong
-          val ns = AudioQueue.machToNs(done - fill) - bufferNs
+          val ns = ops.machToNs(done - fill) - bufferNs
           latMinNs.updateAndGet(m => math.min(m, ns))
           latMaxNs.updateAndGet(m => math.max(m, ns))
           latN.incrementAndGet()

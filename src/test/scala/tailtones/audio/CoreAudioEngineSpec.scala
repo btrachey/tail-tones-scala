@@ -52,15 +52,13 @@ final class FakeQueueOps(
   // ---- observation --------------------------------------------------------
   var enqueues = 0
   var lastClaimRace = 0 // claim calls that returned 0 (lost race / not READY)
-  var hostClock = 1000000L // mach ticks; deviceTick advances it
-  /** 10 ms in THIS machine's mach-time domain (timebase readback; Linux stub
-    * returns 0 → fallback constant, the domain then only matters to the fake's
-    * own consistency).
+  var hostClock = 1000000L // the fake's monotonic clock — plain ns
+  /** 10 ms buffer period in the fake's own ns domain; machToNs is identity, so
+    * the engine's latency math (ops.machToNs) behaves identically on mac and in
+    * the Linux container (whose mach stub returns 0 — facade routing is what
+    * keeps the fake platform-independent, §H).
     */
-  val tickStep: Long =
-    val nsPerMillion = AudioQueue.machToNs(1000000L)
-    if nsPerMillion > 0 then (1000000L * 10000000L / nsPerMillion).max(1L)
-    else 441000L
+  val tickStep = 10000000L
   var fillCalls = 0
   private var allocCount = 0
   private val startedQueues = mutable.ArrayBuffer.empty[FQueue]
@@ -191,6 +189,7 @@ final class FakeQueueOps(
   def callbackCount(st: State): Long = st.callbacks
   def starveCount(st: State): Long = st.starves
   def hostTime(): Long = hostClock
+  def machToNs(ticks: Long): Long = ticks // fake clock IS ns
 
   /** THE fake device: complete up to `n` QUEUED slots, stamping done_time =
     * hostClock advanced by one buffer duration per completion (models the

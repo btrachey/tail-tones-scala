@@ -92,6 +92,12 @@ COPY src/ ./src/
 # S12: MediaBedSpec + PipeEngineMediaSpec read real fixtures (mp3 + foreign-rate
 # WAVs) and exercise the REAL mpg123/ffmpeg transcode in-container.
 COPY test-fixtures ./test-fixtures
+# S14 (rebuild landed with S15): FixtureE2eSpec regenerates the fixtures via
+# scripts/gen-logs.sh and byte-compares against the checked-in test-fixtures/
+# — the script must be IN the image or that spec cannot run in-container.
+# gen-logs.sh carries its own Park-Miller LCG (docs/spikes/S14.md), so the
+# distro mawk reproduces the host's BSD awk bytes exactly — no gawk needed.
+COPY scripts/gen-logs.sh scripts/refresh-goldens.sh ./scripts/
 RUN sbt -batch compile
 
 # S11 acceptance driver (nativeLink + headless + aplay/ffplay smokes); the

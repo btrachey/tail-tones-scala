@@ -111,10 +111,10 @@ import java.util.concurrent.atomic.{
   * (ffplay on PATH), else alsa-pipe (aplay on PATH), else `NullEngine` + stderr
   * warning — with stderr notes on every fallback, never silent
   * (docs/spikes/S11.md records the ffplay-first ordering vs plan §6.1's
-  * alsa-first draft). Other platforms' `auto` stays `NullEngine`.
-  * S15: macOS `auto` is coreaudio-first (probe-gated; TAIL_TONES_COREAUDIO=0
-  * restores the ffplay-first chain). Unknown backend ids warn once on stderr
-  * and use `NullEngine`. S10 also registers the [[tailtones.audio.ChildOwned]]
+  * alsa-first draft). Other platforms' `auto` stays `NullEngine`. S15: macOS
+  * `auto` is coreaudio-first (probe-gated; TAIL_TONES_COREAUDIO=0 restores the
+  * ffplay-first chain). Unknown backend ids warn once on stderr and use
+  * `NullEngine`. S10 also registers the [[tailtones.audio.ChildOwned]]
   * shutdown-hook backstop for child-process orphan prevention (§6.6). The
   * `running` AtomicBoolean is the stop signal S9/S13 share.
   */
@@ -597,9 +597,9 @@ object Main:
     *   - `auto` on macOS → coreaudio if the device probe hits (S15: bindings
     *     linked + default output device; `TAIL_TONES_COREAUDIO=0` disables),
     *     else ffplay-pipe if `ffplay`, else spawn (afplay always present on
-    *     macOS), then null — every fallback prints a stderr note (never
-    *     silent, §3). The S15 flip discharges the S0/S9 "flip once verified"
-    *     note; docs/spikes/S15.md holds the probe + soak evidence.
+    *     macOS), then null — every fallback prints a stderr note (never silent,
+    *     §3). The S15 flip discharges the S0/S9 "flip once verified" note;
+    *     docs/spikes/S15.md holds the probe + soak evidence.
     *   - `auto` on Linux → ffplay-pipe if `ffplay` (ffmpeg) is on PATH, else
     *     alsa-pipe if `aplay`, else null + stderr warning. ffplay-first (not
     *     plan §6.1's alsa-first draft) for cross-OS symmetry with the macOS

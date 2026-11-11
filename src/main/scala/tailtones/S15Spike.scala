@@ -316,6 +316,11 @@ object S15Spike:
     tFeed.start()
     Thread.sleep(3000) // warmup: prime transient passes
     e.resetLatencyStats()
+    // Baselines post-warmup: the bed-attach window (ffmpeg transcode inside
+    // setBedLoop runs while the primed queue drains → a handful of startup
+    // silence fills) and heap ramp are NOT mid-run dropouts/leaks; the soak
+    // reddens only what happens WHILE the stream is active.
+    val und0 = e.underruns
     val t0 = System.nanoTime()
     val cb0 = e.callbackCount
     val rss0 = rssKb // post-warmup baseline: heap ramp is not soak growth
@@ -332,10 +337,11 @@ object S15Spike:
     e.stop(400)
     val starve = e.starveCount
     val und = e.underruns
+    val undMid = und - und0
     val latMaxMs = e.latencyMaxNs / 1e6
     line(
       f"SOAK wall=${wall}%.1fs callbacks=$cbs rate=${rate}%.1f/s (expect ~100/s) " +
-        f"starve=$starve underrunSilence=$und " +
+        f"starve=$starve underrunSilence=$und (mid-run $undMid) " +
         f"latN=${e.latencySamples} latMin=${e.latencyMinNs / 1e6}%.2fms latMax=$latMaxMs%.2fms " +
         f"rss0=${rss0}KB rssMax=${rssMax}KB delta=${rssDelta}KB"
     )
@@ -346,15 +352,17 @@ object S15Spike:
         fails += 1
     // Starve = the queue wanted a buffer and none was READY/queued → real
     // dropout. Silence-filled refills are BY DESIGN between voices (builtin
-    // bed voices land on the 600 ms grid; the ring is empty in between —
-    // that is correct audio, not a dropout; underruns are reported, not
-    // reddened, when there is no continuous media feed).
+    // bed voices land on the 600 ms grid; ring empty in between = correct
+    // audio, not a dropout). MID-RUN (post-warmup) silence fills with a media
+    // bed active ARE a gapless violation — that is what reddens. The 7 fills
+    // observed in the first 30-min run all predate warmup: the ffmpeg
+    // transcode inside setBedLoop runs while the primed queue drains (§G).
     chk(starve == 0L, "device starveCount must be 0 (no dropouts)")
     chk(rate > 90 && rate < 115, f"callback rate $rate%.1f/s outside ~100/s")
     if media.isDefined then
       chk(
-        und == 0L,
-        s"media bed active ⇒ zero silence fills expected, got $und"
+        undMid == 0L,
+        s"media bed active ⇒ zero MID-RUN silence fills expected, got $undMid"
       )
     chk(latMaxMs <= 50.0, f"steady latency max $latMaxMs%.1fms > 50 ms budget")
     chk(

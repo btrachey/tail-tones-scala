@@ -71,6 +71,13 @@ trait QueueOps:
   def starveCount(st: State): Long
   def hostTime(): Long
 
+  /** Convert a hostTime-domain delta to ns (latency math). Real:
+    * mach_absolute_time → ns. Fake: its own tick domain → ns (the engine must
+    * never call the mach stub directly — on Linux it returns 0 and would poison
+    * the latency stats; docs/spikes/S15.md §H).
+    */
+  def machToNs(ticks: Long): Long
+
   /** THE fake-device seam: synchronously complete up to `n` QUEUED slots (mark
     * DONE, stamp done host time + done bytes, bump the completion counter)
     * exactly as the C callback would. No-op on [[QueueOps.real]] (the device
@@ -120,6 +127,7 @@ object QueueOps:
     def callbackCount(st: State): Long = st.callbackCount
     def starveCount(st: State): Long = st.starveCount
     def hostTime(): Long = AudioQueue.hostTime
+    def machToNs(ticks: Long): Long = AudioQueue.machToNs(ticks)
 
     def deviceTick(st: State, n: Int): Int = 0 // the device ticks itself
 end QueueOps

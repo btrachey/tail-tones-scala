@@ -28,6 +28,14 @@
  * The whole AudioQueue/CoreAudio half is macOS-only; the Linux devcontainer
  * compiles this file too, so it sits behind __APPLE__ with stubs elsewhere.
  */
+#ifndef __APPLE__
+/* Scala Native compiles C with -std=c99; glibc then hides clock_gettime /
+ * CLOCK_MONOTONIC / struct timespec from <time.h> unless the POSIX feature
+ * macro is set BEFORE the include (container-verified — the darwin host never
+ * compiles this branch, so the devcontainer is the only gate; docs/spikes/
+ * S15.md). */
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -335,7 +343,7 @@ int AudioQueueSetParameter(void *aq, int id, float v) {
 }
 int AudioQueueGetParameter(void *aq, int id, float *out) {
     (void)aq; (void)id;
-    if (out) *out = 0f;
+    if (out) *out = 0.0f;
     return -1;
 }
 
