@@ -6,6 +6,7 @@ import tailtones.audio.{
   AlsaPipeEngine,
   AudioEngine,
   BedLoop,
+  CoreAudioEngine,
   FfplayPipeEngine,
   MutingEngine,
   NullEngine,
@@ -111,8 +112,9 @@ import java.util.concurrent.atomic.{
   * warning — with stderr notes on every fallback, never silent
   * (docs/spikes/S11.md records the ffplay-first ordering vs plan §6.1's
   * alsa-first draft). Other platforms' `auto` stays `NullEngine`.
-  * Not-yet-implemented ids (`coreaudio`) warn once on stderr and use
-  * `NullEngine`. S10 also registers the [[tailtones.audio.ChildOwned]]
+  * S15: macOS `auto` is coreaudio-first (probe-gated; TAIL_TONES_COREAUDIO=0
+  * restores the ffplay-first chain). Unknown backend ids warn once on stderr
+  * and use `NullEngine`. S10 also registers the [[tailtones.audio.ChildOwned]]
   * shutdown-hook backstop for child-process orphan prevention (§6.6). The
   * `running` AtomicBoolean is the stop signal S9/S13 share.
   */
@@ -289,6 +291,20 @@ object Main:
         .flatMap(_.toIntOption)
         .getOrElse(3)
       S15Spike.run(secs)
+      sys.exit(0)
+    // S15 soak entry: --s15-soak [seconds] [--media <file>] (docs/spikes/S15.md)
+    if args.contains("--s15-soak") then
+      val rest = args.filter(_ != "--s15-soak")
+      val secs = rest
+        .filter(a => a != "--media")
+        .headOption
+        .flatMap(_.toIntOption)
+        .getOrElse(1800)
+      val media = rest.indexOf("--media") match
+        case i if i >= 0 && i + 1 < rest.length =>
+          Some(os.Path(rest(i + 1), os.pwd))
+        case _ => None
+      S15Spike.soak(secs, media)
       sys.exit(0)
     sys.exit(run(args.toSeq, RunDeps.prod(), installSignals = true))
 
@@ -578,9 +594,12 @@ object Main:
     *     latency than spawn per S0-D/E + S10 measurements).
     *   - `spawn` → SpawnEngine (§6.6 pre-rendered bank + per-voice afplay).
     *   - `alsa-pipe` → AlsaPipeEngine if `aplay` is on PATH (S11, Linux).
-    *   - `auto` on macOS → ffplay-pipe, falling back to spawn (afplay always
-    *     present on macOS), then null — every fallback prints a stderr note
-    *     (never silent, §3).
+    *   - `auto` on macOS → coreaudio if the device probe hits (S15: bindings
+    *     linked + default output device; `TAIL_TONES_COREAUDIO=0` disables),
+    *     else ffplay-pipe if `ffplay`, else spawn (afplay always present on
+    *     macOS), then null — every fallback prints a stderr note (never
+    *     silent, §3). The S15 flip discharges the S0/S9 "flip once verified"
+    *     note; docs/spikes/S15.md holds the probe + soak evidence.
     *   - `auto` on Linux → ffplay-pipe if `ffplay` (ffmpeg) is on PATH, else
     *     alsa-pipe if `aplay`, else null + stderr warning. ffplay-first (not
     *     plan §6.1's alsa-first draft) for cross-OS symmetry with the macOS
@@ -646,6 +665,21 @@ object Main:
       ),
       bedResolver = resolverFor(MediaBed.Policy.NativeFirst)
     )
+    // S15: coreaudio behind a device probe (AudioQueue bindings + default
+    // output device). `TAIL_TONES_COREAUDIO=0` disables the probe (the escape
+    // hatch for headless/CI boxes and for humans who want the old default);
+    // `=1` forces it past the probe (automation on boxes where the probe is
+    // unreliable — start() still gates honestly, docs/spikes/S15.md §F).
+    def coreaudioEngine(): Option[AudioEngine] =
+      if !probeCoreAudio(env) then None
+      else
+        Some(
+          new CoreAudioEngine(
+            cfg,
+            warn = note,
+            bedResolver = resolverFor(MediaBed.Policy.TranscodeAlways)
+          )
+        )
     def nullWarn(why: String): AudioEngine =
       note(s"backend '$why' unavailable — using 'null' (no sound)")
       new NullEngine
@@ -656,13 +690,20 @@ object Main:
       case "alsa-pipe" =>
         alsaEngine().getOrElse(nullWarn("alsa-pipe (aplay not on PATH)"))
       case "spawn" => spawnEngine()
+      case "coreaudio" =>
+        coreaudioEngine().getOrElse(nullWarn("coreaudio (no output device)"))
       case "auto" =>
         if osIs("mac") then
-          ffplayEngine().getOrElse {
+          coreaudioEngine().getOrElse {
             note(
-              "auto: ffplay not on PATH — falling back to 'spawn' (afplay; higher latency, see docs/spikes/S10.md)"
+              "auto: coreaudio unavailable (no output device or TAIL_TONES_COREAUDIO=0) — falling back to 'ffplay-pipe' (docs/spikes/S15.md)"
             )
-            spawnEngine()
+            ffplayEngine().getOrElse {
+              note(
+                "auto: ffplay not on PATH — falling back to 'spawn' (afplay; higher latency, see docs/spikes/S10.md)"
+              )
+              spawnEngine()
+            }
           }
         else if osIs("linux") then
           ffplayEngine().getOrElse {
@@ -679,7 +720,7 @@ object Main:
         else new NullEngine
       case other =>
         note(
-          s"backend '$other' is not implemented yet (S15) — using 'null' (no sound)"
+          s"backend '$other' is not implemented yet — using 'null' (no sound)"
         )
         new NullEngine
 
@@ -692,6 +733,22 @@ object Main:
     case "mac"   => scala.scalanative.runtime.Platform.isMac()
     case "linux" => scala.scalanative.runtime.Platform.isLinux()
     case _       => false
+
+  /** S15 coreaudio probe: bindings linked + a default output device exists. env
+    * overrides (same style as `TAIL_TONES_AFPLAY`): `TAIL_TONES_COREAUDIO \=0`
+    * force-misses, `=1` force-hits (deterministic specs / headless CI where the
+    * CoreAudio probe can't be trusted; [[CoreAudioEngine.start]] still gates
+    * honestly on the live probe).
+    */
+  private[tailtones] def probeCoreAudio(
+      env: String => Option[String] = sys.env.get
+  ): Boolean =
+    env("TAIL_TONES_COREAUDIO") match
+      case Some("0") => false
+      case Some("1") => true
+      case _ =>
+        try tailtones.audio.coreservices.QueueOps.real.deviceAvailable
+        catch case scala.util.control.NonFatal(_) => false
 
   /** S12: the backend id [[selectEngine]] WILL resolve to — the same chain,
     * without constructing anything (PATH probes are cheap file checks). Startup
@@ -714,14 +771,18 @@ object Main:
       case "spawn"       => "spawn"
       case "ffplay-pipe" => if hasFfplay then "ffplay-pipe" else "null"
       case "alsa-pipe"   => if hasAplay then "alsa-pipe" else "null"
+      case "coreaudio"   => if probeCoreAudio(env) then "coreaudio" else "null"
       case "auto" =>
-        if osIs("mac") then if hasFfplay then "ffplay-pipe" else "spawn"
+        if osIs("mac") then
+          if probeCoreAudio(env) then "coreaudio"
+          else if hasFfplay then "ffplay-pipe"
+          else "spawn"
         else if osIs("linux") then
           if hasFfplay then "ffplay-pipe"
           else if hasAplay then "alsa-pipe"
           else "null"
         else "null"
-      case _ => "null" // coreaudio (S15) etc. → warn + NullEngine
+      case _ => "null" // unknown ids → warn + NullEngine
 
   /** S12 (§6.5): which [[tailtones.media.MediaBed.Policy]] the resolved backend
     * plays media with — ffplay-pipe → ffmpeg transcode, alsa-pipe → mpg123-
@@ -736,9 +797,11 @@ object Main:
   ): MediaBed.Policy =
     resolvedBackend(cfg, env, osIs) match
       case "ffplay-pipe" => MediaBed.Policy.TranscodeAlways
-      case "alsa-pipe"   => MediaBed.Policy.TranscodeAlsa
-      case "spawn"       => MediaBed.Policy.NativeFirst
-      case _             => MediaBed.Policy.PlayOnly
+      case "coreaudio" =>
+        MediaBed.Policy.TranscodeAlways // S15: ring serves WAV
+      case "alsa-pipe" => MediaBed.Policy.TranscodeAlsa
+      case "spawn"     => MediaBed.Policy.NativeFirst
+      case _           => MediaBed.Policy.PlayOnly
 
   /** Startup banner (stderr only): mode/backend/profile/media summary. */
   private def banner(cfg: Config, p: Args.Parsed): String =

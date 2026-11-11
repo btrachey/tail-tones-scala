@@ -15,11 +15,10 @@ import tailtones.synth.DissonanceLayers
   * [[PcmSink]]. This class owns the child/registry lifecycle
   * ([[ChildProcess]]/[[ChildRegistry]], §6.6 orphan prevention), the drain
   * loop, and the sink, while ALL mixing — ring, gains, voices, media-bed
-  * underflow fill, fade — lives in the ONE shared [[PcmMixer]] (S15
-  * extraction, shared with `coreaudio`, which drains via buffer callbacks
-  * instead of a sink): a backend is a thin adapter supplying only `name`,
-  * `transportExe` and `defaultCommand` — "never two independent DSP paths"
-  * (§6.1).
+  * underflow fill, fade — lives in the ONE shared [[PcmMixer]] (S15 extraction,
+  * shared with `coreaudio`, which drains via buffer callbacks instead of a
+  * sink): a backend is a thin adapter supplying only `name`, `transportExe` and
+  * `defaultCommand` — "never two independent DSP paths" (§6.1).
   *
   * The full ownership map is documented on [[FfplayPipeEngine]] (the original
   * implementation, docs/spikes/S10.md); it applies verbatim here:
@@ -140,7 +139,8 @@ abstract class PipeEngine(
         t.start()
 
   /** 20 Hz heartbeat + gain snapshot (atomic swap; mixer reads it lock-free).
-    * Also refreshes the dissonance-layer snapshot (see [[PcmMixer.applyParams]]).
+    * Also refreshes the dissonance-layer snapshot (see
+    * [[PcmMixer.applyParams]]).
     */
   def applyParams(p: MixParams): Unit = mixer.applyParams(p)
 

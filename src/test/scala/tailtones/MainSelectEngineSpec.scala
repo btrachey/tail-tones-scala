@@ -73,25 +73,58 @@ class MainSelectEngineSpec extends munit.FunSuite:
   }
 
   test("unknown ids warn (never silent) and degrade to NullEngine") {
-    val (e, err) = sel("coreaudio")
+    // S15: `coreaudio` became REAL — probe it directly instead; a genuinely
+    // unknown id still degrades honestly.
+    val (e, err) = sel("gstreamer")
     assert(e.isInstanceOf[NullEngine], e.getClass.getName)
     assert(err.contains("not implemented"), err)
     assert(err.contains("null"), err)
+  }
+
+  test("coreaudio (S15) → CoreAudioEngine when probed, null + note when not") {
+    // env-forced outcomes keep this deterministic on ANY host (the real probe
+    // is a live CoreAudio device query, platform-truthful otherwise).
+    val (e1, err1) = sel(
+      "coreaudio",
+      k => if k == "TAIL_TONES_COREAUDIO" then Some("1") else None
+    )
+    assert(
+      e1.isInstanceOf[tailtones.audio.CoreAudioEngine],
+      e1.getClass.getName
+    )
+    assertEquals(err1, "")
+    val (e2, err2) = sel(
+      "coreaudio",
+      k => if k == "TAIL_TONES_COREAUDIO" then Some("0") else None
+    )
+    assert(e2.isInstanceOf[NullEngine], e2.getClass.getName)
+    assert(err2.contains("coreaudio"), err2)
+    assert(err2.contains("null"), err2)
+    // default probe on the linked platform agrees with probeCoreAudio(env)
+    assertEquals(
+      Main.probeCoreAudio(_ => None),
+      tailtones.audio.coreservices.QueueOps.real.deviceAvailable
+    )
   }
 
   test(
     "auto resolves per the linked platform's chain, never silent"
   ) {
     // The linked binary's platform drives the chain (S11: Linux now has a
-    // real chain too — ffplay-pipe → alsa-pipe → null+warn). Explicit
-    // per-platform branches are pinned in PlatformSelectSpec via the
-    // injectable osIs oracle; this test pins the DEFAULT oracle path.
+    // real chain too — ffplay-pipe → alsa-pipe → null+warn; S15: macOS is
+    // coreaudio → ffplay-pipe → spawn). Explicit per-platform branches are
+    // pinned in PlatformSelectSpec via the injectable osIs oracle; this test
+    // pins the DEFAULT oracle path.
     val (e, err) = sel("auto")
     if scala.scalanative.runtime.Platform.isMac() then
       assert(
-        e.isInstanceOf[FfplayPipeEngine] || e.isInstanceOf[SpawnEngine],
+        e.isInstanceOf[tailtones.audio.CoreAudioEngine] ||
+          e.isInstanceOf[FfplayPipeEngine] ||
+          e.isInstanceOf[SpawnEngine],
         e.getClass.getName
       )
+      if e.isInstanceOf[FfplayPipeEngine] then
+        assert(err.contains("coreaudio unavailable"), err)
       if e.isInstanceOf[SpawnEngine] then
         assert(err.contains("ffplay not on PATH"), err)
     else if scala.scalanative.runtime.Platform.isLinux() then

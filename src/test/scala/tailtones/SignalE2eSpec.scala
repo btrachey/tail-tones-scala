@@ -388,6 +388,53 @@ class SignalE2eSpec extends munit.FunSuite:
     else () // darwin host: the devcontainer verify run owns this backend
   }
 
+  // coreaudio: the macOS in-process device backend (S15) — no children, so
+  // the contract here is prompt voluntary exit + clean fade + zero-device
+  // fallback honesty. Real device on this Mac (S0: Scarlett/DisplayPort).
+  test(
+    "TERM bounded-exit contract [coreaudio] (only where the device probe hits)"
+  ) {
+    if scala.scalanative.runtime.Platform.isMac() &&
+      Main.probeCoreAudio(_ =>
+        None
+      ) // the live device probe (S0: this Mac has output)
+    then
+      val f = logFile(200)
+      val (code, exited, dt, out, _) = signalProbe(
+        Seq(
+          "-f",
+          "--backend",
+          "coreaudio",
+          "--print-events",
+          f.toString,
+          "-q"
+        ),
+        env = Map("TAIL_TONES_COREAUDIO" -> "1"),
+        sig = signal.SIGTERM
+      )
+      assert(exited, s"coreaudio ignored SIGTERM ${dt}ms — stall")
+      assert(dt <= 5000, s"coreaudio exited after ${dt}ms (> 5 s)")
+      assertEquals(code, 0, "coreaudio: clean TERM stop must exit 0")
+      assertEquals(out, os.read(f), "coreaudio: tee drifted under TERM")
+    else ()
+  }
+
+  test("coreaudio with no device → honest null fallback, exit 0 [mac]") {
+    if scala.scalanative.runtime.Platform.isMac() then
+      val f = logFile(50)
+      val (code, exited, _, out, err) = signalProbe(
+        Seq("-f", "--backend", "coreaudio", f.toString),
+        env = Map("TAIL_TONES_COREAUDIO" -> "0"), // probe force-miss
+        sig = signal.SIGTERM
+      )
+      assert(exited)
+      assertEquals(code, 0)
+      assert(err.contains("unavailable"), err)
+      assert(err.contains("null"), err)
+      assertEquals(out, os.read(f))
+    else ()
+  }
+
   // -------------------------------------------------------- SIGINT + fadeout
 
   test("SIGINT: exit 0 with engine-stop fade event, 0 ffplay children after") {

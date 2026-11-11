@@ -9,8 +9,8 @@ import tailtones.cfg.Config
 import tailtones.media.MediaBed
 import tailtones.synth.DissonanceLayers
 
-/** `coreaudio` backend — plan §6.1/§6.7, S15. macOS primary once verified
-  * (this slice flips `auto`, docs/spikes/S15.md).
+/** `coreaudio` backend — plan §6.1/§6.7, S15. macOS primary once verified (this
+  * slice flips `auto`, docs/spikes/S15.md).
   *
   * ==Architecture (the §6.7 invariant, discharged by construction)==
   * One AudioQueue plays a single persistent stream of s16 mono 44.1 kHz PCM
@@ -21,27 +21,27 @@ import tailtones.synth.DissonanceLayers
   * (`src/main/resources/scala-native/ttaq.c`): it records bookkeeping into a
   * malloc'ed state block with `__atomic` stores and CAS-claims mixer-prefilled
   * (READY) buffers straight into `AudioQueueEnqueueBuffer`. **The callback
-  * never enters managed code** — no Scala frame, no allocation, no GC entry
-  * is even possible on that path. All synthesis/mixing lives in the ONE
-  * shared [[PcmMixer]] (same producer path as ffplay-pipe/alsa-pipe — §6.1
-  * "never two independent DSP paths"), drained by a Scala-owned daemon
-  * thread (the "mixer poll") that is the ONLY code refilling buffers.
+  * never enters managed code** — no Scala frame, no allocation, no GC entry is
+  * even possible on that path. All synthesis/mixing lives in the ONE shared
+  * [[PcmMixer]] (same producer path as ffplay-pipe/alsa-pipe — §6.1 "never two
+  * independent DSP paths"), drained by a Scala-owned daemon thread (the "mixer
+  * poll") that is the ONLY code refilling buffers.
   *
   * The plan's ring is the mixer's: the scheduler `offer`s voices into
-  * `mixer.ring` (4×4410 int16, §6.7 sizing); the mixer poll drains it into
-  * DONE buffers (underflow → looping media bed → silence, exactly the pipe
-  * backends' priority), applies master×fade at FILL time (spike §C: the queue
-  * level meter is pre-volume, so fill-time gain is the machine-verifiable —
-  * and behaviorally identical — place), stamps the slot READY, and claims.
-  * S11 handoff honored: the AudioQueue path never routes through
-  * [[PcmSink]] (that seam stays ffplay/alsa's transport).
+  * `mixer.ring` (4×4410 int16, §6.7 sizing); the mixer poll drains it into DONE
+  * buffers (underflow → looping media bed → silence, exactly the pipe backends'
+  * priority), applies master×fade at FILL time (spike §C: the queue level meter
+  * is pre-volume, so fill-time gain is the machine-verifiable — and
+  * behaviorally identical — place), stamps the slot READY, and claims. S11
+  * handoff honored: the AudioQueue path never routes through [[PcmSink]] (that
+  * seam stays ffplay/alsa's transport).
   *
   * ==Media bed gapless (plan §6.5, coreaudio-only)==
   * `setBedLoop` decodes the (S12-validated/transcoded) WAV once; on ring
   * underflow the mixer poll serves the bed continuously through the same
-  * buffers — seam-to-seam at the loop wrap, with the 5 ms crossfade baked in
-  * at transcode (S12 §D-1) for self-generated files. No respawn, no afplay:
-  * this is the criterion §6.5 reserves for coreaudio.
+  * buffers — seam-to-seam at the loop wrap, with the 5 ms crossfade baked in at
+  * transcode (S12 §D-1) for self-generated files. No respawn, no afplay: this
+  * is the criterion §6.5 reserves for coreaudio.
   *
   * ==Volume==
   * `kAudioQueueParam_Volume` is exercised (set to 1.0 at start; bindings +
@@ -50,28 +50,31 @@ import tailtones.synth.DissonanceLayers
   * acceptance-comparable "buffer contents pre/post" signal (spike §C).
   *
   * ==Lifecycle / stop latch==
-  * `start` gates on `ops.deviceAvailable` (selection already checked; a
-  * device that vanished is startupFailure + warn, never silent, never an
-  * exit-code failure, §3). `stop(fadeMs)` mirrors [[PipeEngine]]: fade
-  * envelope → mixer converts the ring while the device drains → final flush →
-  * `AudioQueueStop` then `AudioQueueDispose` on EVERY exit path (stop and
-  * `killChildren` share one `queueReleased` latch; Main's shutdown hook
-  * covers the crash path). Latency (fill→device-start) and underrun/starve
-  * counters are sampled at the refill decision for the soak (spike §D method).
+  * `start` gates on `ops.deviceAvailable` (selection already checked; a device
+  * that vanished is startupFailure + warn, never silent, never an exit-code
+  * failure, §3). `stop(fadeMs)` mirrors [[PipeEngine]]: fade envelope → mixer
+  * converts the ring while the device drains → final flush → `AudioQueueStop`
+  * then `AudioQueueDispose` on EVERY exit path (stop and `killChildren` share
+  * one `queueReleased` latch; Main's shutdown hook covers the crash path).
+  * Latency (fill→device-start) and underrun/starve counters are sampled at the
+  * refill decision for the soak (spike §D method).
   *
   * Threads: trait methods on the scheduler thread except `stop` (main); the
-  * mixer poll owns `bedPos` + the refill path (stale-tolerant, §6.2). Joins
-  * go through [[ChildProcess.joinQuietly]] (S10 §D-1 — no raw `Thread.join`).
+  * mixer poll owns `bedPos` + the refill path (stale-tolerant, §6.2). Joins go
+  * through [[ChildProcess.joinQuietly]] (S10 §D-1 — no raw `Thread.join`).
   */
 final class CoreAudioEngine(
     cfg: Config,
     warn: String => Unit = _ => (),
     /** Injectable device facade; production = [[QueueOps.real]]. */
     private[audio] val ops: QueueOps = QueueOps.real,
-    /** Queue depth in buffers. 6 × 10 ms (default) ≈ steady-state latency
-      * 40–50 ms measured (spike §D) — within the plan's ≤50 ms budget.
+    /** Queue depth in buffers. 5 × 10 ms (default): the 441-frame soak on this
+      * machine measured steady-state fill→device-start max 51.3 ms at depth 6
+      * (docs/spikes/S15.md §F addendum) — one buffer over the plan's 50 ms
+      * budget; depth 5 caps steady max ≈ (depth−1)·10 + poll ≈ 45 ms while
+      * still never starving (starve=0 at depth 6 and 5).
       */
-    numBuffers: Int = 6,
+    numBuffers: Int = 5,
     /** Frames per buffer (441 = 10 ms at 44.1 kHz). */
     bufferFrames: Int = 441,
     /** Mixer poll cadence (§6.7 producer thread); 5 ms keeps refill latency
@@ -81,7 +84,12 @@ final class CoreAudioEngine(
     /** S12 media-bed resolver (same contract as [[PipeEngine]]). */
     bedResolver: Option[
       BedLoop => Either[String, MediaBed.Prepared]
-    ] = None
+    ] = None,
+    /** Production true. False = never spawn the poll thread (deterministic
+      * specs drive [[pollOnceSync]] + the fake `deviceTick` themselves — a live
+      * thread would race the synchronous handoff assertions.
+      */
+    startPollThread: Boolean = true
 ) extends AudioEngine
     with ChildOwned:
 
@@ -96,8 +104,8 @@ final class CoreAudioEngine(
   private var buffers: Vector[ops.Buffer] = Vector.empty
   private val queueReleased = new AtomicBoolean(false)
 
-  /** Fill staging buffer — allocated once (§6.7: the poll allocates nothing
-    * per iteration).
+  /** Fill staging buffer — allocated once (§6.7: the poll allocates nothing per
+    * iteration).
     */
   private val fillBuf = new Array[Short](bufferFrames)
 
@@ -107,6 +115,7 @@ final class CoreAudioEngine(
     * the engine was supposed to have content (underrun).
     */
   private val underrunSilence = new AtomicLong(0L)
+
   /** deviceTick-equivalent completions observed (mirrors the C counter). */
   private[audio] val refillCount = new AtomicLong(0L)
   private val latMinNs = new AtomicLong(Long.MaxValue)
@@ -202,14 +211,18 @@ final class CoreAudioEngine(
                   val stt = ops.start(q)
                   if stt != AudioQueue.NoErr then
                     mixer.setStartupFailure(s"AudioQueueStart OSStatus=$stt")
-                    warn(s"coreaudio unavailable: AudioQueueStart failed ($stt)")
+                    warn(
+                      s"coreaudio unavailable: AudioQueueStart failed ($stt)"
+                    )
                     releaseQueue()
                   else
                     mixer.running.set(true)
-                    val t = new Thread(() => mixerPoll(), "tt-mixer-coreaudio")
-                    t.setDaemon(true)
-                    mixerThread = t
-                    t.start()
+                    if startPollThread then
+                      val t =
+                        new Thread(() => mixerPoll(), "tt-mixer-coreaudio")
+                      t.setDaemon(true)
+                      mixerThread = t
+                      t.start()
         catch
           case NonFatal(e) =>
             mixer.setStartupFailure(
@@ -271,15 +284,14 @@ final class CoreAudioEngine(
     if first then mixer.releaseBed()
     ()
 
-  /** AudioQueueStop + AudioQueueDispose + freeState exactly once, from any
-    * path (stop / killChildren / init-failure). Waits for the poll thread
-    * before freeing the state block it reads (bounded — S10 §D-1 discipline).
+  /** AudioQueueStop + AudioQueueDispose + freeState exactly once, from any path
+    * (stop / killChildren / init-failure). Waits for the poll thread before
+    * freeing the state block it reads (bounded — S10 §D-1 discipline).
     */
   private def releaseQueue(): Unit =
     if queueReleased.compareAndSet(false, true) then
       val t = mixerThread
-      if t != null then
-        ChildProcess.joinQuietly(t, 300)
+      if t != null then ChildProcess.joinQuietly(t, 300)
       queueOpt.foreach { q =>
         try
           ops.stop(q, immediate = true)
@@ -358,8 +370,17 @@ final class CoreAudioEngine(
       slot += 1
     refills
 
-  /** After the poll exits: convert any DONE slot one last time and claim
-    * READY slots so the fade tail reaches the device before we stop it.
+  /** Deterministic test hook: exactly one refill pass, synchronous (fake device
+    * drives completions; the real poll thread is parked on a long pollMs in
+    * those specs).
+    */
+  private[audio] def pollOnceSync(): Int =
+    (queueOpt, stateOpt) match
+      case (Some(q), Some(st)) => pollOnce(q, st)
+      case _                   => 0
+
+  /** After the poll exits: convert any DONE slot one last time and claim READY
+    * slots so the fade tail reaches the device before we stop it.
     */
   private def finalFlush(): Unit =
     try

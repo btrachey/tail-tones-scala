@@ -74,7 +74,8 @@ object S15Spike:
             case Right(b) => AudioQueue.bindBuffer(st, slot, b, frames * 2)
             case Left(c)  => allocFail += s" slot$slot=$c"
         }
-        if allocFail.nonEmpty then line(s"[$label] AllocateBuffer FAILED$allocFail")
+        if allocFail.nonEmpty then
+          line(s"[$label] AllocateBuffer FAILED$allocFail")
         val content = square(frames, 8000)
 
         // Latency sampling: mixer computes done−fill−buffer at the refill
@@ -158,7 +159,9 @@ object S15Spike:
             s"[$label] volume default=${fmt(vDefault)} readback .25=${fmt(vLow)} 1.0=${fmt(vFull)}"
           )
           line(
-            f"[$label] meter dBFS full=${mFull1.map(_._1).getOrElse(-999f)}%.1f/${mFull2.map(_._1).getOrElse(-999f)}%.1f vol.25=${mLow.map(_._1).getOrElse(-999f)}%.1f (square@8000 ≈ -12.2 pre-volume)"
+            f"[$label] meter dBFS full=${mFull1.map(_._1).getOrElse(-999f)}%.1f/${mFull2
+                .map(_._1)
+                .getOrElse(-999f)}%.1f vol.25=${mLow.map(_._1).getOrElse(-999f)}%.1f (square@8000 ≈ -12.2 pre-volume)"
           )
         val cb = st.callbackCount
         val totalS = seconds.toDouble
@@ -200,13 +203,19 @@ object S15Spike:
       val probeT = new Thread(() => probeBody(), "tt-s15-probe")
       probeT.start()
       while probeT.isAlive do Thread.sleep(5)
-      line(f"thread[scala_main]   self=${hex(mainSelf)} stack=${hex(mainStack)}")
-      line(f"thread[scala_worker] self=${hex(workerSelf)} stack=${hex(workerStack)}")
+      line(
+        f"thread[scala_main]   self=${hex(mainSelf)} stack=${hex(mainStack)}"
+      )
+      line(
+        f"thread[scala_worker] self=${hex(workerSelf)} stack=${hex(workerStack)}"
+      )
 
       // Phase A: threading + flow + volume/meter at 100 ms buffers.
-      val a = phase("A-100ms", frames = 4410, bufs = 4, seconds = 3, meter = true)
+      val a =
+        phase("A-100ms", frames = 4410, bufs = 4, seconds = 3, meter = true)
       // Phase B: latency at 10 ms buffers (device-side depth 60 ms).
-      val b = phase("B-latency", frames = 441, bufs = 6, seconds = 3, meter = false)
+      val b =
+        phase("B-latency", frames = 441, bufs = 6, seconds = 3, meter = false)
 
       a.foreach { r =>
         line(
@@ -224,7 +233,135 @@ object S15Spike:
           )
         else line("latency[fill->device] NO valid samples")
       }
-      line(s"device[after dispose] = ${AudioQueue.defaultOutputDevice} (still available)")
+      line(
+        s"device[after dispose] = ${AudioQueue.defaultOutputDevice} (still available)"
+      )
 
   def run(): Unit = run(0)
+
+  /** S15 soak (plan §9 S15 row, "30-min burst soak — automated"): runs the REAL
+    * CoreAudioEngine on the REAL device for `seconds`, fed a synthetic 20 Hz
+    * scheduler-style voice stream (bed grid + alert spikes) and, if given, a
+    * real media bed through MediaBed (gapless ring serve). Warmup (3 s) then
+    * reset the latency stats; at the end assert (via nonzero exit) zero device
+    * starves, zero underrun-silence while fed, steady RSS, and the callback
+    * rate matches `buffers × 100/s` for 441-frame buffers. Prints one
+    * machine-readable stats line for the report. Audible output remains
+    * UNVERIFIED-BY-AGENT (TCC silence, S0).
+    */
+  def soak(seconds: Int, media: Option[os.Path]): Unit =
+    import tailtones.audio.*
+    import tailtones.cfg.Config
+    import tailtones.media.MediaBed
+    import tailtones.synth.Waveform
+    line(s"== S15 soak ${seconds}s (real CoreAudioEngine, real device) ==")
+    if !AudioQueue.deviceAvailable then
+      line("NO OUTPUT DEVICE — cannot soak")
+      sys.exit(2)
+    val warn: String => Unit = m => line(s"warn: $m")
+    val resolver: Option[BedLoop => Either[String, MediaBed.Prepared]] =
+      media.map(p =>
+        _ => MediaBed.prepare(p, MediaBed.Policy.TranscodeAlways, sys.env.get)
+      )
+    val cfg = Config.Default.copy(
+      backend = "coreaudio",
+      mode =
+        if media.isDefined then tailtones.model.Mode.Media
+        else tailtones.model.Mode.Builtin
+    )
+    val e = new CoreAudioEngine(
+      cfg,
+      warn = warn,
+      bedResolver = resolver,
+      numBuffers = 5,
+      bufferFrames = 441,
+      pollMs = 5L
+    )
+    e.start()
+    e.startupFailure.foreach { f =>
+      line(s"STARTUP FAILED: $f")
+      sys.exit(2)
+    }
+    media.foreach(m => e.setBedLoop(Some(BedLoop(m))))
+    e.applyParams(MixParams(0.6f, 0.35f, 0.0f, 0.0f))
+    val myPid = scala.scalanative.posix.unistd.getpid().toString
+    def rssKb: Long =
+      try
+        os
+          .proc("ps", "-o", "rss=", "-p", myPid)
+          .call(check = false, stderr = os.Pipe)
+          .out
+          .text()
+          .trim
+          .toLong
+      catch case _ => -1L
+    val bedFreqs = Seq(261.63f, 329.63f, 392.0f, 523.25f)
+    val tFeed = new Thread(
+      () => {
+        val end = System.currentTimeMillis() + seconds * 1000L
+        var i = 0
+        while System.currentTimeMillis() < end do
+          val f = bedFreqs(i % bedFreqs.length)
+          e.playVoice(Voice(Waveform.Square, f, 260, 0.25f, 2.5f))
+          if i % 13 == 0 then
+            e.playVoice(Voice(Waveform.Saw, 740f, 180, 0.5f, 0f))
+          i += 1
+          try Thread.sleep(50)
+          catch case _: InterruptedException => ()
+        ()
+      },
+      "tt-soak-feed"
+    )
+    tFeed.setDaemon(true)
+    tFeed.start()
+    Thread.sleep(3000) // warmup: prime transient passes
+    e.resetLatencyStats()
+    val t0 = System.nanoTime()
+    val cb0 = e.callbackCount
+    val rss0 = rssKb // post-warmup baseline: heap ramp is not soak growth
+    val rssSamples = scala.collection.mutable.ArrayBuffer.empty[Long]
+    val end = t0 + seconds * 1000000000L
+    while System.nanoTime() < end do
+      Thread.sleep(1000)
+      rssSamples += rssKb
+    val wall = (System.nanoTime() - t0) / 1e9
+    val cbs = e.callbackCount - cb0
+    val rate = cbs / wall
+    val rssMax = if rssSamples.nonEmpty then rssSamples.max else -1L
+    val rssDelta = rssMax - rss0
+    e.stop(400)
+    val starve = e.starveCount
+    val und = e.underruns
+    val latMaxMs = e.latencyMaxNs / 1e6
+    line(
+      f"SOAK wall=${wall}%.1fs callbacks=$cbs rate=${rate}%.1f/s (expect ~100/s) " +
+        f"starve=$starve underrunSilence=$und " +
+        f"latN=${e.latencySamples} latMin=${e.latencyMinNs / 1e6}%.2fms latMax=$latMaxMs%.2fms " +
+        f"rss0=${rss0}KB rssMax=${rssMax}KB delta=${rssDelta}KB"
+    )
+    var fails = 0
+    def chk(cond: Boolean, what: String): Unit =
+      if !cond then
+        line(s"FAIL: $what")
+        fails += 1
+    // Starve = the queue wanted a buffer and none was READY/queued → real
+    // dropout. Silence-filled refills are BY DESIGN between voices (builtin
+    // bed voices land on the 600 ms grid; the ring is empty in between —
+    // that is correct audio, not a dropout; underruns are reported, not
+    // reddened, when there is no continuous media feed).
+    chk(starve == 0L, "device starveCount must be 0 (no dropouts)")
+    chk(rate > 90 && rate < 115, f"callback rate $rate%.1f/s outside ~100/s")
+    if media.isDefined then
+      chk(
+        und == 0L,
+        s"media bed active ⇒ zero silence fills expected, got $und"
+      )
+    chk(latMaxMs <= 50.0, f"steady latency max $latMaxMs%.1fms > 50 ms budget")
+    chk(
+      rssDelta < 4096,
+      s"RSS growth ${rssDelta}KB during soak (S13 leak discipline)"
+    )
+    line(if fails == 0 then "SOAK: PASS" else s"SOAK: $fails FAILURES")
+    sys.exit(if fails == 0 then 0 else 1)
+  end soak
 end S15Spike

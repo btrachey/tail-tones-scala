@@ -122,8 +122,33 @@ class PlatformSelectSpec extends munit.FunSuite:
 
   // ------------------------------------------------------- mac branches stay
 
+  test(
+    "mac auto: coreaudio probe hit → CoreAudioEngine (S15 promoted default)"
+  ) {
+    val env: String => Option[String] =
+      k => if k == "TAIL_TONES_COREAUDIO" then Some("1") else pathWithFakes(k)
+    val (e, err) = sel("auto", env, mac)
+    assert(
+      e.isInstanceOf[tailtones.audio.CoreAudioEngine],
+      e.getClass.getName
+    )
+    assertEquals(err, "") // coreaudio-first is the happy path: no note
+  }
+
+  test("mac auto: coreaudio probe miss + ffplay present → ffplay-pipe") {
+    val env: String => Option[String] =
+      k => if k == "TAIL_TONES_COREAUDIO" then Some("0") else pathWithFakes(k)
+    val (e, err) = sel("auto", env, mac)
+    assert(e.isInstanceOf[FfplayPipeEngine], e.getClass.getName)
+    assert(err.contains("coreaudio unavailable"), err)
+  }
+
   test("mac auto still resolves ffplay→spawn regardless of the linux env") {
-    val (e, err) = sel("auto", noBinaries, mac)
+    // S15 put coreaudio ABOVE this chain; with the probe killed the old
+    // chain must be byte-for-byte intact (S0/S10 fallback ladder).
+    val env: String => Option[String] =
+      k => if k == "TAIL_TONES_COREAUDIO" then Some("0") else noBinaries(k)
+    val (e, err) = sel("auto", env, mac)
     // no ffplay fake on PATH → SpawnEngine fallback with the S10 note
     assert(
       e.isInstanceOf[FfplayPipeEngine] ||
@@ -132,6 +157,23 @@ class PlatformSelectSpec extends munit.FunSuite:
     )
     if e.isInstanceOf[tailtones.audio.SpawnEngine] then
       assert(err.contains("ffplay not on PATH"), err)
+  }
+
+  test("--backend coreaudio forces CoreAudioEngine on any osIs when probed") {
+    val env: String => Option[String] =
+      k => if k == "TAIL_TONES_COREAUDIO" then Some("1") else None
+    val (e, err) = sel("coreaudio", env, nowhere)
+    assert(
+      e.isInstanceOf[tailtones.audio.CoreAudioEngine],
+      e.getClass.getName
+    )
+    assertEquals(err, "")
+    // explicit id + probe miss → null + honest note (never silent)
+    val env0: String => Option[String] =
+      k => if k == "TAIL_TONES_COREAUDIO" then Some("0") else None
+    val (e2, err2) = sel("coreaudio", env0, nowhere)
+    assert(e2.isInstanceOf[NullEngine], e2.getClass.getName)
+    assert(err2.contains("coreaudio"), err2)
   }
 
   test(

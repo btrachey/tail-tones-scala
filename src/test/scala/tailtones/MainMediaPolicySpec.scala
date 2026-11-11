@@ -37,7 +37,8 @@ class MainMediaPolicySpec extends munit.FunSuite:
       "TAIL_TONES_AFPLAY" -> "/no/such/afplay",
       "TAIL_TONES_FFMPEG" -> "/no/such/ffmpeg",
       "TAIL_TONES_MPG123" -> "/no/such/mpg123",
-      "TAIL_TONES_AFINFO" -> "/no/such/afinfo"
+      "TAIL_TONES_AFINFO" -> "/no/such/afinfo",
+      "TAIL_TONES_COREAUDIO" -> "0" // S15: never probe the live device here
     )
     (k: String) => envMap.get(k)
 
@@ -58,14 +59,18 @@ class MainMediaPolicySpec extends munit.FunSuite:
       "TAIL_TONES_AFPLAY" -> "/no/afplay",
       "TAIL_TONES_FFMPEG" -> "/no/ffmpeg",
       "TAIL_TONES_MPG123" -> "/no/mpg123",
-      "TAIL_TONES_AFINFO" -> "/no/afinfo"
+      "TAIL_TONES_AFINFO" -> "/no/afinfo",
+      // S15: hermetic by default — coreaudio never probes the real device
+      // here; tests opt in with envFakes("coreaudio").
+      "TAIL_TONES_COREAUDIO" -> "0"
     )
     val over = names.map {
-      case "ffplay" => "TAIL_TONES_FFPLAY" -> (bin / "ffplay").toString
-      case "aplay"  => "TAIL_TONES_APLAY" -> (bin / "aplay").toString
-      case "ffmpeg" => "TAIL_TONES_FFMPEG" -> (bin / "ffmpeg").toString
-      case "mpg123" => "TAIL_TONES_MPG123" -> (bin / "mpg123").toString
-      case other    => "TAIL_TONES_AFINFO" -> (bin / other).toString
+      case "ffplay"    => "TAIL_TONES_FFPLAY" -> (bin / "ffplay").toString
+      case "aplay"     => "TAIL_TONES_APLAY" -> (bin / "aplay").toString
+      case "ffmpeg"    => "TAIL_TONES_FFMPEG" -> (bin / "ffmpeg").toString
+      case "mpg123"    => "TAIL_TONES_MPG123" -> (bin / "mpg123").toString
+      case "coreaudio" => "TAIL_TONES_COREAUDIO" -> "1"
+      case other       => "TAIL_TONES_AFINFO" -> (bin / other).toString
     }.toMap
     (k: String) => over.get(k).orElse(base.get(k))
 
@@ -113,10 +118,24 @@ class MainMediaPolicySpec extends munit.FunSuite:
       Main.mediaPolicy(cfgOf("alsa-pipe"), none),
       MediaBed.Policy.PlayOnly
     )
-    // coreaudio (S15) → warn + null → PlayOnly
+    // coreaudio probed off → warn + null → PlayOnly
     assertEquals(
       Main.mediaPolicy(cfgOf("coreaudio"), none),
       MediaBed.Policy.PlayOnly
+    )
+  }
+
+  test("coreaudio (S15, probed) plays media with the ffmpeg transcode policy") {
+    val ca = envFakes("coreaudio")
+    assertEquals(
+      Main.mediaPolicy(cfgOf("coreaudio"), ca),
+      MediaBed.Policy.TranscodeAlways,
+      "coreaudio serves the bed through the ring: needs 44.1k mono PCM16 WAV"
+    )
+    assertEquals(
+      Main.mediaPolicy(cfgOf("auto"), ca, osIs = k => k == "mac"),
+      MediaBed.Policy.TranscodeAlways,
+      "mac auto with the coreaudio probe hitting → coreaudio → TranscodeAlways"
     )
   }
 
@@ -166,12 +185,14 @@ class MainMediaPolicySpec extends munit.FunSuite:
       Seq.empty,
       Seq("ffplay"),
       Seq("aplay"),
-      Seq("ffplay", "aplay")
+      Seq("ffplay", "aplay"),
+      Seq("coreaudio"),
+      Seq("coreaudio", "ffplay")
     )
     for
       combo <- combos
       osKind <- Seq[Option[String]](Some("mac"), Some("linux"), None)
-      backend <- Seq("auto", "ffplay-pipe", "alsa-pipe")
+      backend <- Seq("auto", "ffplay-pipe", "alsa-pipe", "coreaudio")
     do
       val env = envFakes(combo*)
       val osIs: String => Boolean = osKind match

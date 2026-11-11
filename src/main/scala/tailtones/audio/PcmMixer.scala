@@ -231,20 +231,20 @@ final class PcmMixer(
     }
     bedPos = 0 // drain thread may read a stale pos once — benign (§6.2)
 
-  /** Release the temp dir owned by the current bed (engine stop path; the
-    // drain loop must be finished first — never delete a WAV mid-serve).
+  /** Release the temp dir owned by the current bed (engine stop path; the //
+    * drain loop must be finished first — never delete a WAV mid-serve).
     */
   def releaseBed(): Unit =
     bedPrepared.foreach(MediaBed.release)
     bedPrepared = None
 
-  /** Media bed underflow fill (drain thread). Loops run seam-to-seam from
-    * frame 0 (plan §6.5, "acceptable v1"); self-generated files carry the
-    * baked tail↔head blend so the seam is continuous at the wrap (S15 gapless
-    * media: this SAME fill serves the coreaudio ring — docs/spikes/S15.md §F).
-    * Partial fills are fine — the drain loop writes `frames` it got and
-    * repolls. Scheduler thread sets bedPcm before bedPos resets; one stale
-    * frame at a swap is benign (§6.2).
+  /** Media bed underflow fill (drain thread). Loops run seam-to-seam from frame
+    * 0 (plan §6.5, "acceptable v1"); self-generated files carry the baked
+    * tail↔head blend so the seam is continuous at the wrap (S15 gapless media:
+    * this SAME fill serves the coreaudio ring — docs/spikes/S15.md §F). Partial
+    * fills are fine — the drain loop writes `frames` it got and repolls.
+    * Scheduler thread sets bedPcm before bedPos resets; one stale frame at a
+    * swap is benign (§6.2).
     */
   def fillBedLoop(dst: Array[Short], max: Int): Int =
     bedPcm match
@@ -272,14 +272,15 @@ final class PcmMixer(
   def clearFade(): Unit = fadingTo.set(None)
 
   /** Scale frames[0 until n] by master × fadeEnvelope. In place, zero
-    * allocation. Pipe backends call this at drain time; coreaudio at fill
-    * time (docs/spikes/S15.md §C).
+    * allocation. Pipe backends call this at drain time; coreaudio at fill time
+    * (docs/spikes/S15.md §C).
     */
   def applyMasterFade(frames: Array[Short], n: Int): Unit =
     val g0 = paramsRef.get().master
     val fadeScale: Float = fadingTo.get() match
-      case Some((startMs, ms)) => PcmMixer.fadeScale(System.currentTimeMillis() - startMs, ms)
-      case None                => 1f
+      case Some((startMs, ms)) =>
+        PcmMixer.fadeScale(System.currentTimeMillis() - startMs, ms)
+      case None => 1f
     val g = g0 * fadeScale
     if g != 1f then
       var i = 0

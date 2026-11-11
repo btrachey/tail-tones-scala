@@ -116,7 +116,14 @@ check_orphans() { # check_orphans <label>
 expect_children() { # expect_children <label> — positive evidence the step
   # actually STARTED transport children (called mid-run, before TERM). Without
   # this, "0 orphans" passes vacuously when nothing ever launched.
-  local n
+  # S15: coreaudio is an IN-PROCESS device backend — no children by design;
+  # its positive-evidence check is the engine-start event (checked below by
+  # the step's own err_grep) and the S15 soak, not pgrep.
+  local label="$1" n
+  if grep -q "kind=engine-start .*name=coreaudio" "$TMPD/$label.err" 2>/dev/null; then
+    ok "$label: coreaudio in-process (no transport children expected, S15)"
+    return
+  fi
   n=$(( $(transport_count) - BASE ))
   if [[ "$n" -gt 0 ]]; then ok "$1: transport children observed while running ($n)"
   else bad "$1: NO transport children while running (nothing launched!)"; fi

@@ -197,6 +197,9 @@ class EngineE2eSpec extends munit.FunSuite:
   test(
     "auto on macOS selects ffplay-pipe via PATH probe (engine-start event)"
   ) {
+    // S15 flipped the mac auto ladder to coreaudio-first; this row pins the
+    // SECOND rung — probe killed, ffplay found on PATH → ffplay-pipe. The
+    // old default chain must stay intact behind the kill-switch (S0 §S10).
     val drain = tmp / "auto.pcm"
     val fake = fakeFfplay(drain)
     val fakeDir = tmp / "bindir"
@@ -205,7 +208,10 @@ class EngineE2eSpec extends munit.FunSuite:
     val f = logFile(60)
     val (code, out, err, _) = runFollowing(
       Seq("-f", "--print-events", f.toString),
-      env = Map("PATH" -> (fakeDir.toString + ":/usr/bin:/bin")),
+      env = Map(
+        "PATH" -> (fakeDir.toString + ":/usr/bin:/bin"),
+        "TAIL_TONES_COREAUDIO" -> "0"
+      ),
       settleMs = 1200,
       signal = "INT"
     )
@@ -215,5 +221,30 @@ class EngineE2eSpec extends munit.FunSuite:
       err.contains("kind=engine-start") && err.contains("name=ffplay-pipe"),
       s"auto did not select ffplay-pipe:\n$err"
     )
+  }
+
+  test(
+    "auto on macOS selects coreaudio when the device probe hits (engine-start + stop events)"
+  ) {
+    // S15 flip: the promoted mac default. Runs the REAL AudioQueue on the
+    // real device (audible output UNVERIFIED — TCC silence, S0); what this
+    // row proves machine-side: selection, clean engine lifecycle events,
+    // SIGINT exits 0 with the queue disposed, tee byte-identical.
+    if !scala.scalanative.runtime.Platform.isMac() then ()
+    else
+      val f = logFile(60)
+      val (code, out, err, _) = runFollowing(
+        Seq("-f", "--print-events", f.toString),
+        env = Map("TAIL_TONES_COREAUDIO" -> "1"),
+        settleMs = 1200,
+        signal = "INT"
+      )
+      assertEquals(code, 0)
+      assertEquals(out, os.read(f))
+      assert(
+        err.contains("kind=engine-start") && err.contains("name=coreaudio"),
+        s"auto did not select coreaudio:\n$err"
+      )
+      assert(err.contains("kind=engine-stop"), s"no engine-stop:\n$err")
   }
 end EngineE2eSpec

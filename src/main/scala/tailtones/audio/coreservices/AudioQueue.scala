@@ -6,27 +6,26 @@ import scala.scalanative.unsigned._
 /** Minimal `@extern @link("AudioToolbox")` bindings for the AudioQueue output
   * path (plan §9 S15 row, §6.7 thread discipline).
   *
-  * Surface is deliberately tiny — exactly what [[tailtones.audio.CoreAudioEngine]]
-  * needs: create a queue for s16 mono PCM at 44.1 kHz, allocate buffers,
-  * start, stop, dispose, read/write `kAudioQueueParam_Volume`, and claim
-  * pre-filled buffers for `AudioQueueEnqueueBuffer` through a single
-  * atomic-CAS helper. Struct field access (AudioQueueBuffer,
-  * AudioStreamBasicDescription) lives in
+  * Surface is deliberately tiny — exactly what
+  * [[tailtones.audio.CoreAudioEngine]] needs: create a queue for s16 mono PCM
+  * at 44.1 kHz, allocate buffers, start, stop, dispose, read/write
+  * `kAudioQueueParam_Volume`, and claim pre-filled buffers for
+  * `AudioQueueEnqueueBuffer` through a single atomic-CAS helper. Struct field
+  * access (AudioQueueBuffer, AudioStreamBasicDescription) lives in
   * `src/main/resources/scala-native/ttaq.c` instead of Scala Native struct
-  * interop: Apple's structs carry `const` fields, and the C-file approach
-  * keeps the callback path free of layout assumptions — the Scala side only
-  * ever handles scalars and opaque pointers.
+  * interop: Apple's structs carry `const` fields, and the C-file approach keeps
+  * the callback path free of layout assumptions — the Scala side only ever
+  * handles scalars and opaque pointers.
   *
   * The buffer-completion callback is a C function pointer owned by ttaq.c
   * ([[AudioQueue.callbackFn]]) — NOT a Scala `CFuncPtr` closure. §6.7's
   * invariant ("the C callback only hands pre-existing buffers to
   * AudioQueueEnqueueBuffer — never allocation, never GC entry") is then
   * structural: the callback never enters managed code at all. It records
-  * bookkeeping into the instance state block ([[AudioQueue.State]]) with
-  * plain atomic C stores and claims READY→QUEUED buffers via a CAS; the
-  * Scala-owned mixer thread polls that block, refills DONE slots and marks
-  * them READY from its own thread. docs/spikes/S15.md carries the threading
-  * + flow evidence.
+  * bookkeeping into the instance state block ([[AudioQueue.State]]) with plain
+  * atomic C stores and claims READY→QUEUED buffers via a CAS; the Scala-owned
+  * mixer thread polls that block, refills DONE slots and marks them READY from
+  * its own thread. docs/spikes/S15.md carries the threading + flow evidence.
   *
   * Memory: the state block is `malloc`ed (C heap — invisible to the GC and
   * never touched by it); free it with [[AudioQueue.freeState]].
@@ -64,9 +63,9 @@ object AudioQueue:
   @extern
   private object audioToolbox:
     /** AudioQueueNewOutput(&asbd, callback, userData, runLoop=null,
-      * runLoopMode=null, flags=0, &outAQ). With runLoop NULL the callback
-      * runs on a dedicated AudioQueue-owned thread (documented; spike-proven
-      * in docs/spikes/S15.md).
+      * runLoopMode=null, flags=0, &outAQ). With runLoop NULL the callback runs
+      * on a dedicated AudioQueue-owned thread (documented; spike-proven in
+      * docs/spikes/S15.md).
       */
     def AudioQueueNewOutput(
         inFormat: Ptr[Byte],
@@ -142,7 +141,8 @@ object AudioQueue:
     def ttaq_queued_count(st: Ptr[Byte]): Int = extern
     def ttaq_starve_count(st: Ptr[Byte]): ULong = extern
 
-    def ttaq_claim_and_enqueue(aq: AQRef, st: Ptr[Byte], slot: Int): Int = extern
+    def ttaq_claim_and_enqueue(aq: AQRef, st: Ptr[Byte], slot: Int): Int =
+      extern
     def ttaq_callback_fn(): Ptr[Byte] = extern
 
     def ttaq_buf_data(buf: AQBufRef): Ptr[Byte] = extern
@@ -177,7 +177,8 @@ object AudioQueue:
       ttaq.ttaq_state_stamp_enqueue(ptr, slot, hostTime.toULong)
     def stampFill(slot: Int, hostTime: Long): Unit =
       ttaq.ttaq_state_stamp_fill(ptr, slot, hostTime.toULong)
-    def enqueueTime(slot: Int): Long = ttaq.ttaq_state_enqueue_time(ptr, slot).toLong
+    def enqueueTime(slot: Int): Long =
+      ttaq.ttaq_state_enqueue_time(ptr, slot).toLong
     def fillTime(slot: Int): Long = ttaq.ttaq_state_fill_time(ptr, slot).toLong
     def doneTime(slot: Int): Long = ttaq.ttaq_state_done_time(ptr, slot).toLong
     def doneBytes(slot: Int): Int = ttaq.ttaq_state_done_bytes(ptr, slot).toInt
@@ -248,9 +249,9 @@ object AudioQueue:
   def bufferByteSize(buf: AQBufRef): Int = ttaq.ttaq_buf_size(buf).toInt
 
   /** CAS READY→QUEUED; on success the winner has already called
-    * AudioQueueEnqueueBuffer (in C, stamping the enqueue host time). Returns
-    * 1 claimed, 0 someone else claimed / not READY, -1 enqueue failed
-    * (rolled back to FREE).
+    * AudioQueueEnqueueBuffer (in C, stamping the enqueue host time). Returns 1
+    * claimed, 0 someone else claimed / not READY, -1 enqueue failed (rolled
+    * back to FREE).
     */
   def claimAndEnqueue(aq: AQRef, st: State, slot: Int): Int =
     ttaq.ttaq_claim_and_enqueue(aq, st.ptr, slot)
@@ -286,6 +287,7 @@ object AudioQueue:
 
   /** Monotonic ns (CLOCK_MONOTONIC). */
   def nanos: Long = ttaq.ttaq_probe_nanos()
+
   /** mach_absolute_time ticks (the domain AudioQueue timestamps live in). */
   def hostTime: Long = ttaq.ttaq_probe_host_time().toLong
   def machToNs(ticks: Long): Long = ttaq.ttaq_probe_mach_to_ns(ticks.toULong)
@@ -301,8 +303,8 @@ object AudioQueue:
   /** kAudioQueueProperty_IsRunning: 1 while consuming, 0 stopped, −1 error. */
   def isRunning(aq: AQRef): Int = ttaq.ttaq_probe_is_running(aq)
 
-  /** Device sample-rate readback via kAudioQueueDeviceProperty_SampleRate
-    * (−1.0 on error) — proves a real device is attached.
+  /** Device sample-rate readback via kAudioQueueDeviceProperty_SampleRate (−1.0
+    * on error) — proves a real device is attached.
     */
   def deviceRate(aq: AQRef): Double = ttaq.ttaq_probe_dev_rate(aq)
 

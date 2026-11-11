@@ -4,14 +4,14 @@ package tailtones.audio.coreservices
   * [[tailtones.audio.CoreAudioEngine]] is unit-testable with a fake device
   * (docs/spikes/S15.md §F): tests construct [[FakeQueueOps]] and drive
   * `deviceTick(n)` SYNCHRONOUSLY from the test thread — the fake "device"
-  * completing buffers is the exact event the C completion callback delivers
-  * in production, so the ring→fill→claim→enqueue handoff, the no-alloc
-  * callback path, volume byte-scaling, the bed-loop seam, and the stop/fade
-  * latch are all deterministic in-process.
+  * completing buffers is the exact event the C completion callback delivers in
+  * production, so the ring→fill→claim→enqueue handoff, the no-alloc callback
+  * path, volume byte-scaling, the bed-loop seam, and the stop/fade latch are
+  * all deterministic in-process.
   *
-  * Every method mirrors one production step; implementations must never
-  * block the mixer poll. `deviceTick` exists ONLY on the facade (the real
-  * device ticks itself).
+  * Every method mirrors one production step; implementations must never block
+  * the mixer poll. `deviceTick` exists ONLY on the facade (the real device
+  * ticks itself).
   */
 trait QueueOps:
 
@@ -21,9 +21,9 @@ trait QueueOps:
   /** malloc'ed shared state block (slot machine + counters). */
   type State
 
-  /** True when the platform offers an output device (selection gate). The
-    * real impl answers via the CoreAudio default-output probe; a fake
-    * answers whatever the test needs.
+  /** True when the platform offers an output device (selection gate). The real
+    * impl answers via the CoreAudio default-output probe; a fake answers
+    * whatever the test needs.
     */
   def deviceAvailable: Boolean
 
@@ -41,8 +41,8 @@ trait QueueOps:
 
   type Buffer
 
-  /** Write frames → the buffer's device-visible data area + byte size.
-    * MIXER thread only; the fake records the bytes for assertions.
+  /** Write frames → the buffer's device-visible data area + byte size. MIXER
+    * thread only; the fake records the bytes for assertions.
     */
   def fillBuffer(buf: Buffer, frames: Array[Short], n: Int): Unit
 
@@ -71,10 +71,10 @@ trait QueueOps:
   def starveCount(st: State): Long
   def hostTime(): Long
 
-  /** THE fake-device seam: synchronously complete up to `n` QUEUED slots
-    * (mark DONE, stamp done host time + done bytes, bump the completion
-    * counter) exactly as the C callback would. No-op on [[QueueOps.real]]
-    * (the device completes on its own thread).
+  /** THE fake-device seam: synchronously complete up to `n` QUEUED slots (mark
+    * DONE, stamp done host time + done bytes, bump the completion counter)
+    * exactly as the C callback would. No-op on [[QueueOps.real]] (the device
+    * completes on its own thread).
     */
   def deviceTick(st: State, n: Int): Int
 end QueueOps
