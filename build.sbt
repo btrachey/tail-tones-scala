@@ -27,3 +27,17 @@ nativeConfig ~= { c =>
     .withMode(Mode.debug) // releaseFast
     .withGC(GC.immix) // commix
 }
+
+// S15 coreaudio: AudioToolbox/CoreAudio are macOS FRAMEWORKS — sbt-scala-native
+// 0.5.12's @link emits `-l<name>`, which cannot resolve a framework (verified:
+// `ld: library 'AudioToolbox' not found`, docs/spikes/S15.md). The bindings
+// therefore carry plain @extern and the frameworks are linked here, host-OS
+// conditional so the Linux devcontainer never sees them (the ttaq.c stubs
+// satisfy those symbols there).
+nativeConfig ~= { c =>
+  val frameworks =
+    if (scala.util.Properties.isMac)
+      Seq("-framework", "AudioToolbox", "-framework", "CoreAudio")
+    else Seq.empty
+  c.withLinkingOptions(c.linkingOptions ++ frameworks)
+}
