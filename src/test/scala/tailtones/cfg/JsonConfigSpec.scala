@@ -107,18 +107,30 @@ class JsonConfigSpec extends munit.FunSuite:
   }
 
   test("partial config fills gaps from defaults") {
-    val c = ok("""{"volume": 0.2, "bed": {"bits": 6}}""")
-    assertEqualsDouble(c.volume, 0.2, 1e-12)
+    // EVERY section appears with exactly one key present: an absent section
+    // takes the root fallback (the case-class default) and never walks its
+    // per-key opt() defaults, so only this shape pins the parser's defaults
+    // against drift. The parser once carried a second copy of the drone
+    // defaults as literals and silently served the old loud/fast drone to
+    // any JSON omitting those keys (S17-R review blocker).
+    val c = ok(
+      """{
+        |  "volume": 0.2,
+        |  "severity": {"tickMs": 40},
+        |  "bed": {"bits": 6},
+        |  "alert": {"volume": 0.5},
+        |  "tail": {"pollMs": 100}
+        |}""".stripMargin
+    )
+    assertEqualsDouble(c.volume, 0.2, 1e-12) // set, not defaulted
+    assertEquals(c.severity.tickMs, 40L)
+    assertEquals(c.severity, Config.Default.severity.copy(tickMs = 40L))
     assertEquals(c.bed.bits, 6)
-    // SECTION EQUALITY, not per-key literals: the parser once carried a
-    // second copy of the drone defaults as literals and silently served the
-    // old loud/fast drone to any JSON omitting those keys (S17-R). `ok("{}")`
-    // cannot catch this — the root falls back to BedSection(), bypassing the
-    // per-key opt() defaults; only a PARTIAL section walks them.
     assertEquals(c.bed, Config.Default.bed.copy(bits = 6))
-    assertEquals(c.alert, Config.Default.alert)
-    assertEquals(c.severity, Config.Default.severity)
-    assertEquals(c.tail, Config.Default.tail)
+    assertEqualsDouble(c.alert.volume, 0.5, 1e-12)
+    assertEquals(c.alert, Config.Default.alert.copy(volume = 0.5))
+    assertEquals(c.tail.pollMs, 100L)
+    assertEquals(c.tail, Config.Default.tail.copy(pollMs = 100L))
     assertEquals(c.profile, "auto")
   }
 

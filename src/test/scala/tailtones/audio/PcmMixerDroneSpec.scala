@@ -71,11 +71,14 @@ class PcmMixerDroneSpec extends munit.FunSuite:
     val h2 = goertzel(xs, (2 * f).toInt) // 522
     val h3 = goertzel(xs, (3 * f).toInt) // 783
     val dc = goertzel(xs, 0)
+    // sub-octave FIRST: the deleted chord put a triangle at f/2 (measured
+    // sub/fund ≈ 0.29); asserting it before the fourth keeps that regression
+    // reachable even when the fourth assertion already trips.
+    assert(sub <= 0.10 * fund, s"sub-octave present (chord regression): ${sub / fund}")
     assert(
       four >= 0.5 * fund,
       s"fourth weak: |G(348)|=$four vs |G(261)|=$fund (${four / fund})"
     )
-    assert(sub <= 0.10 * fund, s"sub-octave present (chord regression): ${sub / fund}")
     assert(h2 <= 0.10 * fund, s"square-family 2f present: ${h2 / fund}")
     assert(h3 <= 0.10 * fund, s"square-family 3f present: ${h3 / fund}")
     assert(dc <= 0.10 * fund, s"DC offset (25% duty regression): ${dc / fund}")
@@ -162,7 +165,7 @@ class PcmMixerDroneSpec extends munit.FunSuite:
     assertEquals(m.droneGlideRemaining, 0)
     m.setDroneTarget(Some(DroneTarget(b)))
     val glideFrames =
-      (Config.Default.bed.droneGlideMs * sr / 1000).toInt // 1200 ms
+      (Config.Default.bed.droneGlideMs * sr / 1000).toInt // 3000 ms
     // the crossfade is COMMITTED by the next drain iteration (drain-thread
     // ownership) — one chunk in, the glide must be running
     drain(m, 1)

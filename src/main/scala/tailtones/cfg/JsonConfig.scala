@@ -521,8 +521,8 @@ object JsonConfig:
           backend <- opt(o, "backend", c, Nil, "auto")((v, cc, p) =>
             enumStr(v, cc, p, Config.Backends, "backend")
           )
-          volume <- opt(o, "volume", c, Nil, 0.6)(num)
-          fadeout <- opt(o, "fadeoutMs", c, Nil, 400L)(long)
+          volume <- opt(o, "volume", c, Nil, Config.Default.volume)(num)
+          fadeout <- opt(o, "fadeoutMs", c, Nil, Config.Default.fadeoutMs)(long)
           severity <- opt(o, "severity", c, Nil, SeveritySection())(
             (v0, cc, p) => objAt(v0, cc, p).flatMap(severitySection(_, cc, p))
           )
