@@ -33,6 +33,13 @@ class ConfigSpec extends munit.FunSuite:
     assertEquals(c.bed.bits, 4)
     assert(c.bed.duckOnSeverity)
     assertEqualsDouble(c.bed.duckMax, 0.35, 1e-12)
+    // S17: the continuous pentatonic drone IS the default bed now
+    assert(c.bed.drone)
+    assertEquals(c.bed.droneIntervalMs, 4500L)
+    assertEquals(c.bed.droneGlideMs, 1200L)
+    assertEquals(c.bed.droneOctaveSpan, 1)
+    assertEqualsDouble(c.bed.droneJitterCents, 25.0, 1e-12)
+    assertEqualsDouble(c.bed.droneIntervalJitter, 0.25, 1e-12)
     assertEquals(c.alert.waveform, Waveform.Saw)
     assertEqualsDouble(c.alert.volume, 0.55, 1e-12)
     assertEquals(c.alert.minIntervalMs, 150L)

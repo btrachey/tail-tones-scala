@@ -6,6 +6,7 @@ import tailtones.audio.{
   AudioEngine,
   BedLoop,
   ChildProcess,
+  DroneTarget,
   FfplayPipeEngine,
   MixParams,
   MutingEngine,
@@ -78,6 +79,8 @@ class ModeSignalSpec extends munit.FunSuite:
       engine.events.filter(e =>
         e.startsWith("voice ") && !e.contains("wave=saw")
       )
+    /** S17: scheduler bed-drone publishes (the continuous default bed). */
+    def droneStarts: Vector[Ev] = fieldEvents("bed-drone")
     def alertVoices: Vector[String] =
       engine.events.filter(_.contains("wave=saw"))
     def mixes: Vector[MixParams] = engine.events.collect {
@@ -110,7 +113,10 @@ class ModeSignalSpec extends munit.FunSuite:
     // sustained errors: severity pins 1.0 → duck saturates at duckMax
     errorStorm(cfg, h, 20)
     h.scheduler.stop()
-    assert(h.bedVoices.nonEmpty, "builtin must play synth bed voices")
+    // S17 default bed = the continuous drone (NullEngine is drone-capable);
+    // the one-shot burst grid is pinned bed.drone=false elsewhere.
+    assert(h.droneStarts.nonEmpty, "builtin must drive the continuous bed")
+    assertEquals(h.bedVoices, Vector.empty)
     assert(h.alertStarts.nonEmpty, "high severity must grant alerts")
     val peak = h.mixes.maxBy(_.duck)
     assertEqualsFloat(peak.duck, cfg.bed.duckMax.toFloat, 1e-6f)
@@ -315,6 +321,106 @@ class ModeSignalSpec extends munit.FunSuite:
     assertEquals(evs.last, "stop fadeMs=123")
     assertEquals(e.name, "null")
     assertEquals(rec.stopFadeMs, 123)
+  }
+
+  // ------------------------------------------------ S17 drone capability
+  //
+  // Main wraps EVERY engine in MutingEngine (Main.scala), so the decorator's
+  // capability resolution IS the production path — these pin it.
+
+  test(
+    "DroneCapable resolves through MutingEngine: capable delegate → true + forwarded; plain delegate → false + no-op"
+  ) {
+    val rec = new NullEngine
+    val muting = new MutingEngine(rec, () => false)
+    assert(muting.sustainsDrone, "null delegate sustains the drone")
+    muting.setDroneTarget(Some(DroneTarget(261.63f)))
+    muting.setDroneTarget(None)
+    assert(
+      rec.events.contains(NullEngine.droneLine(Some(DroneTarget(261.63f)))),
+      rec.events.toString
+    )
+    assert(rec.events.contains("drone none"), rec.events.toString)
+
+    // spawn has NO continuous stream → the scheduler must fall back; a
+    // no-op-under-mute would be a SILENT bed instead.
+    val spawn = new SpawnEngine(Config.Default, warn = _ => ())
+    val mutingSpawn = new MutingEngine(spawn, () => false)
+    assertEquals(
+      mutingSpawn.sustainsDrone,
+      false,
+      "spawn-under-mute must NOT claim the drone"
+    )
+    mutingSpawn.setDroneTarget(Some(DroneTarget(261.63f))) // no-op, never throws
+
+    // a plain (non-DroneCapable) engine under the decorator: false + no-op
+    val plain = new AudioEngine:
+      def start(): Unit = ()
+      def applyParams(p: MixParams): Unit = ()
+      def playVoice(v: Voice): Unit = ()
+      def setBedLoop(spec: Option[BedLoop]): Unit = ()
+      def stop(fadeMs: Int): Unit = ()
+      def name: String = "plain"
+    assertEquals(new MutingEngine(plain, () => false).sustainsDrone, false)
+  }
+
+  test(
+    "scheduler under the MutingEngine wrapper: drone on capable delegate, burst grid over spawn"
+  ) {
+    // production shape: Scheduler ← MutingEngine ← NullEngine
+    val rec = new NullEngine
+    val h = new Harness(Config.Default)
+    // rebuild the scheduler against the WRAPPED engine (Harness builds its
+    // own; mirror its wiring with the decorator in place)
+    val sched = Scheduler.fromConfig(
+      Config.Default,
+      new MutingEngine(rec, () => false),
+      h.clock,
+      (_, _) => (),
+      SchedulerOptions(seed = 7L),
+      sleep = ms => h.clock.advance(ms)
+    )
+    sched.runSync(80) // 4 s → at least the t=0 publish
+    sched.stop()
+    assert(
+      rec.events.exists(_.startsWith("drone freqHz=")),
+      s"wrapped null must get drone targets: ${rec.events.take(5)}"
+    )
+    assertEquals(
+      rec.voices.size,
+      0,
+      "drone branch must not ALSO fire burst voices"
+    )
+
+    // spawn-backed scheduler (no capability): the scheduler must take the
+    // BURST branch — proven on its own EMIT STREAM, independent of spawn's
+    // playVoice swallowing everything while unstarted (the silent-bed
+    // regression the decorator predicate exists to prevent).
+    val spawn = new SpawnEngine(Config.Default, warn = _ => ())
+    val spawnEvents = mutable.ArrayBuffer.empty[(String, String)]
+    val spawnClock = FakeClock.atZero()
+    val sched2 = Scheduler.fromConfig(
+      Config.Default,
+      new MutingEngine(spawn, () => false),
+      spawnClock,
+      (kind, fields) => spawnEvents += ((kind, fields)),
+      SchedulerOptions(seed = 7L),
+      sleep = ms => spawnClock.advance(ms)
+    )
+    sched2.runSync(80) // 4 s → several 600 ms burst notes
+    sched2.stop()
+    assert(
+      spawnEvents.exists { case (k, f) =>
+        k == "voice-start" && f.contains("source=bed")
+      },
+      s"spawn scheduler must schedule burst bed voices, got: $spawnEvents"
+    )
+    assertEquals(
+      spawnEvents.count(_._1 == "bed-drone"),
+      0,
+      "spawn must NEVER be driven by the drone branch"
+    )
+    assertEquals(spawn.startupFailure, None) // bank never built (never started)
   }
 
   // ------------------------------------------------------- live --volume

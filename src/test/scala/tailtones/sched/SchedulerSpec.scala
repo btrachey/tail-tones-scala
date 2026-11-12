@@ -76,6 +76,11 @@ class SchedulerSpec extends munit.FunSuite:
       engine.events.filter(e =>
         e.startsWith("voice ") && !e.contains("wave=saw")
       )
+    /** S17: scheduler `bed-drone` events (fake-time + fields). */
+    def droneStarts: Vector[Ev] = fieldEvents("bed-drone")
+    /** S17: NullEngine recordings of every published target. */
+    def droneRecords: Vector[String] =
+      engine.events.filter(_.startsWith("drone "))
     private val mixRe =
       """severity=([\d.E-]+) master=([\d.E-]+) bedGain=([\d.E-]+) alertGain=([\d.E-]+) duck=([\d.E-]+) layers=(\d)""".r
     def mixes: Vector[MixParams] = fieldEvents("mix-tick").map { e =>
@@ -110,8 +115,9 @@ class SchedulerSpec extends munit.FunSuite:
 
   test("golden: healthy info-only — calm consonant bed, zero alerts") {
     // 10 info/min: one info per 120 ticks (6 s), 240 ticks (12 s), seed 42.
-    // §7.3 row 1: S ≤ 0.06, below the alert floor → NO alert ever; bed grid
-    // at 600 ms (100 bpm); tiny duck. Pinned stream: SchedulerSpec.healthy.
+    // §7.3 row 1: S ≤ 0.06, below the alert floor → NO alert ever; the S17
+    // drone bed republishes ~every 4.5 s (seeded walk); tiny duck. Pinned
+    // stream: SchedulerSpec.healthy.
     val h = new Harness(Config.Default)
     h.scheduler.submit(Level.Info)
     h.prime()
@@ -124,7 +130,8 @@ class SchedulerSpec extends munit.FunSuite:
     assertEquals(h.alertVoices.size, 0)
     assertEquals(h.kinds.head, "engine-start")
     assertEquals(h.kinds.last, "engine-stop")
-    assertEquals(h.bedVoices.size, 20) // t = 0, 600, ..., 11400
+    assert(h.droneStarts.nonEmpty, "continuous bed drone never published")
+    assertEquals(h.bedVoices.size, 0) // drone owns the bed, not the burst grid
     assertEquals(h.maxLayersSeen, 0)
     assertEquals(h.stream, SchedulerSpec.healthy)
   }
@@ -268,7 +275,23 @@ class SchedulerSpec extends munit.FunSuite:
     h.run(400) // 20 s
     h.scheduler.stop()
     assertEquals(h.alertStarts.size, 0)
-    assertEquals(h.bedVoices.size, 20000 / 600 + 1)
+    // S17 drone bed over 20 s: dwell 4500±25% → 4..7 publishes (t=0, then
+    // every interval). The OLD burst default stays available and is pinned
+    // in the bed.drone=false variant below.
+    assert(
+      h.droneStarts.size >= 4 && h.droneStarts.size <= 7,
+      s"drone publishes ${h.droneStarts.size} over 20 s, expected 4..7"
+    )
+    assertEquals(h.bedVoices.size, 0)
+    // burst fallback still walks the tempo grid when drone is disabled
+    val g = new Harness(
+      Config.Default.copy(bed = Config.Default.bed.copy(drone = false))
+    )
+    g.run(400)
+    g.scheduler.stop()
+    assertEquals(g.alertStarts.size, 0)
+    assertEquals(g.bedVoices.size, 20000 / 600 + 1)
+    assertEquals(g.droneStarts.size, 0)
   }
 
   // ------------------------------------------------------------ cadence
@@ -322,11 +345,16 @@ class SchedulerSpec extends munit.FunSuite:
   // ---------------------------------------------------- §6.3 mode policies
 
   test("builtin: bed on grid, duck ≤ duckMax·S reaching duckMax at S=1") {
-    val h = new Harness(Config.Default, bedIntervalMs = Some(500L))
+    // The burst grid owns the bed only when drone is off (spawn fallback /
+    // opt-out): 3 s at 500 ms → 6 one-shot notes, drone events absent.
+    val cfg =
+      Config.Default.copy(bed = Config.Default.bed.copy(drone = false))
+    val h = new Harness(cfg, bedIntervalMs = Some(500L))
     (1 to 20).foreach(_ => h.scheduler.submit(Level.Error))
     h.run(60) // 3 s → 6 bed notes at 500 ms
     h.scheduler.stop()
     assertEquals(h.bedVoices.size, 6)
+    assertEquals(h.droneStarts.size, 0)
     assert(h.alertStarts.nonEmpty)
     // alert shapes are the F# saw family (§6.4 tritone vs C bed)
     h.alertVoices.foreach { v =>
@@ -443,14 +471,17 @@ class SchedulerSpec extends munit.FunSuite:
     (1 to 3).foreach(_ => h.scheduler.submit(Level.Error))
     h.run(40)
     h.scheduler.stop()
+    // S17: the continuous bed publishes `bed-drone` instead of one-shot
+    // bed `voice-start`s; `voice-start` survives for alerts and for the
+    // burst fallback (bed.drone=false), pinned next.
     assertEquals(
       h.kinds.distinct.sorted,
       Vector(
         "alert-start",
+        "bed-drone",
         "engine-start",
         "engine-stop",
-        "mix-tick",
-        "voice-start"
+        "mix-tick"
       )
     )
     val a = h.alertStarts.head
@@ -459,7 +490,22 @@ class SchedulerSpec extends munit.FunSuite:
         .matches(a.fields),
       a.fields
     )
-    val b = h.fieldEvents("voice-start").head
+    val d = h.droneStarts.head
+    assert(
+      """^wave=square midi=\d+ freqHz=[\d.E-]+ detuneCents=-?[\d.E-]+ intervalMs=\d+ gain=[\d.E-]+$""".r
+        .matches(d.fields),
+      d.fields
+    )
+    // burst fallback keeps the ORIGINAL voice-start contract
+    val g = new Harness(
+      Config.Default.copy(bed = Config.Default.bed.copy(drone = false))
+    )
+    (1 to 3).foreach(_ => g.scheduler.submit(Level.Error))
+    g.run(40)
+    g.scheduler.stop()
+    assert(g.kinds.distinct.contains("voice-start"), g.kinds.distinct.toString)
+    assertEquals(g.droneStarts.size, 0)
+    val b = g.fieldEvents("voice-start").filter(_.fields.contains("source=bed")).head
     assert(
       """^source=bed wave=square midi=\d+ freqHz=[\d.E-]+ durMs=260 gain=[\d.E-]+ detuneCents=-?[\d.E-]+$""".r
         .matches(b.fields),
@@ -513,105 +559,85 @@ object SchedulerSpec:
   val healthy: Vector[String] = Vector(
     "t=0 kind=engine-start name=null",
     "t=0 kind=mix-tick severity=0.03 master=0.6 bedGain=0.346325 alertGain=0.0165 duck=0.0105 layers=0",
-    "t=0 kind=voice-start source=bed wave=square midi=60 freqHz=261.62558 durMs=260 gain=0.346325 detuneCents=9.161174",
+    "t=0 kind=bed-drone wave=square midi=64 freqHz=334.01044 detuneCents=22.867622 intervalMs=3966 gain=0.346325",
     "t=200 kind=mix-tick severity=0.029485 master=0.6 bedGain=0.34638813 alertGain=0.01621654 duck=0.010319617 layers=0",
     "t=600 kind=mix-tick severity=0.02848 master=0.6 bedGain=0.34651116 alertGain=0.015664145 duck=0.009968093 layers=0",
-    "t=600 kind=voice-start source=bed wave=square midi=62 freqHz=293.66476 durMs=260 gain=0.34651116 detuneCents=-11.146075",
     "t=750 kind=mix-tick severity=0.028113 master=0.6 bedGain=0.34655622 alertGain=0.015461883 duck=0.00983938 layers=0",
     "t=1050 kind=mix-tick severity=0.027391 master=0.6 bedGain=0.34664458 alertGain=0.015065161 duck=0.00958692 layers=0",
     "t=1200 kind=mix-tick severity=0.027038 master=0.6 bedGain=0.3466879 alertGain=0.014870632 duck=0.00946313 layers=0",
-    "t=1200 kind=voice-start source=bed wave=square midi=64 freqHz=329.62756 durMs=260 gain=0.3466879 detuneCents=20.168613",
     "t=1450 kind=mix-tick severity=0.026458 master=0.6 bedGain=0.34675887 alertGain=0.014551986 duck=0.009260355 layers=0",
     "t=1500 kind=mix-tick severity=0.026344 master=0.6 bedGain=0.34677288 alertGain=0.014489081 duck=0.0092203235 layers=0",
-    "t=1800 kind=voice-start source=bed wave=square midi=67 freqHz=391.99542 durMs=260 gain=0.3468557 detuneCents=-11.212597",
     "t=1900 kind=mix-tick severity=0.025446 master=0.6 bedGain=0.34688282 alertGain=0.013995529 duck=0.008906246 layers=0",
     "t=2350 kind=mix-tick severity=0.024473 master=0.6 bedGain=0.347002 alertGain=0.013460351 duck=0.008565678 layers=0",
-    "t=2400 kind=voice-start source=bed wave=square midi=69 freqHz=440.0 durMs=260 gain=0.34701496 detuneCents=14.145089",
     "t=2450 kind=mix-tick severity=0.024262 master=0.6 bedGain=0.34702787 alertGain=0.01334423 duck=0.0084917825 layers=0",
     "t=2850 kind=mix-tick severity=0.023436 master=0.6 bedGain=0.3471291 alertGain=0.012889676 duck=0.008202521 layers=0",
-    "t=3000 kind=voice-start source=bed wave=square midi=72 freqHz=523.25116 durMs=260 gain=0.34716618 detuneCents=-3.1754513",
     "t=3250 kind=mix-tick severity=0.022637 master=0.6 bedGain=0.34722692 alertGain=0.012450607 duck=0.007923113 layers=0",
     "t=3350 kind=mix-tick severity=0.022442 master=0.6 bedGain=0.34725082 alertGain=0.012343196 duck=0.007854762 layers=0",
-    "t=3600 kind=voice-start source=bed wave=square midi=74 freqHz=587.3295 durMs=260 gain=0.34730974 detuneCents=-5.671656",
     "t=3850 kind=mix-tick severity=0.021491 master=0.6 bedGain=0.34736738 alertGain=0.011819885 duck=0.0075217453 layers=0",
     "t=3900 kind=mix-tick severity=0.021398 master=0.6 bedGain=0.34737876 alertGain=0.01176879 duck=0.00748923 layers=0",
+    "t=4000 kind=bed-drone wave=square midi=55 freqHz=197.42413 detuneCents=12.553748 intervalMs=5037 gain=0.34740138",
     "t=4200 kind=mix-tick severity=0.020849 master=0.6 bedGain=0.34744602 alertGain=0.011466825 duck=0.0072970707 layers=0",
-    "t=4200 kind=voice-start source=bed wave=square midi=76 freqHz=659.2551 durMs=260 gain=0.34744602 detuneCents=4.7174954",
     "t=4400 kind=mix-tick severity=0.020491 master=0.6 bedGain=0.3474899 alertGain=0.011269832 duck=0.0071717114 layers=0",
     "t=4450 kind=mix-tick severity=0.020402 master=0.6 bedGain=0.34750074 alertGain=0.011221115 duck=0.0071407096 layers=0",
-    "t=4800 kind=voice-start source=bed wave=square midi=79 freqHz=783.99084 durMs=260 gain=0.3475754 detuneCents=16.298294",
     "t=5000 kind=mix-tick severity=0.019453 master=0.6 bedGain=0.34761706 alertGain=0.010698927 duck=0.0068084076 layers=0",
     "t=5250 kind=mix-tick severity=0.019036 master=0.6 bedGain=0.3476681 alertGain=0.01046967 duck=0.0066625173 layers=0",
-    "t=5400 kind=voice-start source=bed wave=square midi=81 freqHz=880.0 durMs=260 gain=0.34769824 detuneCents=4.371369",
     "t=5550 kind=mix-tick severity=0.018547 master=0.6 bedGain=0.34772795 alertGain=0.010201039 duck=0.00649157 layers=0",
     "t=5600 kind=mix-tick severity=0.018467 master=0.6 bedGain=0.34773776 alertGain=0.010156942 duck=0.006463508 layers=0",
     "t=5950 kind=mix-tick severity=0.047916 master=0.6 bedGain=0.34413034 alertGain=0.026353553 duck=0.016770443 layers=0",
-    "t=6000 kind=voice-start source=bed wave=square midi=48 freqHz=130.81279 durMs=260 gain=0.34415573 detuneCents=3.5520175",
     "t=6100 kind=mix-tick severity=0.047297 master=0.6 bedGain=0.34420612 alertGain=0.026013266 duck=0.016553896 layers=0",
     "t=6150 kind=mix-tick severity=0.047092 master=0.6 bedGain=0.3442312 alertGain=0.025900815 duck=0.016482336 layers=0",
     "t=6300 kind=mix-tick severity=0.046484 master=0.6 bedGain=0.34430566 alertGain=0.025566373 duck=0.01626951 layers=0",
     "t=6350 kind=mix-tick severity=0.046283 master=0.6 bedGain=0.34433028 alertGain=0.025455855 duck=0.01619918 layers=0",
     "t=6550 kind=mix-tick severity=0.045488 master=0.6 bedGain=0.34442768 alertGain=0.02501854 duck=0.015920889 layers=0",
-    "t=6600 kind=voice-start source=bed wave=square midi=50 freqHz=146.83238 durMs=260 gain=0.34445179 detuneCents=12.625498",
     "t=6750 kind=mix-tick severity=0.044707 master=0.6 bedGain=0.34452343 alertGain=0.024588736 duck=0.015647376 layers=0",
     "t=6800 kind=mix-tick severity=0.044514 master=0.6 bedGain=0.3445471 alertGain=0.024482442 duck=0.015579737 layers=0",
     "t=6850 kind=mix-tick severity=0.044321 master=0.6 bedGain=0.34457067 alertGain=0.02437661 duck=0.015512388 layers=0",
     "t=6900 kind=mix-tick severity=0.04413 master=0.6 bedGain=0.34459412 alertGain=0.024271235 duck=0.015445331 layers=0",
     "t=7100 kind=mix-tick severity=0.043371 master=0.6 bedGain=0.344687 alertGain=0.023854269 duck=0.01517999 layers=0",
-    "t=7200 kind=voice-start source=bed wave=square midi=50 freqHz=146.83238 durMs=260 gain=0.34473285 detuneCents=-7.104004",
     "t=7300 kind=mix-tick severity=0.042626 master=0.6 bedGain=0.34477827 alertGain=0.023444468 duck=0.0149192065 layers=0",
     "t=7350 kind=mix-tick severity=0.042442 master=0.6 bedGain=0.34480086 alertGain=0.023343122 duck=0.014854714 layers=0",
     "t=7650 kind=mix-tick severity=0.041353 master=0.6 bedGain=0.34493425 alertGain=0.02274418 duck=0.01447357 layers=0",
     "t=7800 kind=mix-tick severity=0.040819 master=0.6 bedGain=0.34499967 alertGain=0.0224505 duck=0.014286681 layers=0",
-    "t=7800 kind=voice-start source=bed wave=square midi=52 freqHz=164.81378 durMs=260 gain=0.34499967 detuneCents=-4.1156225",
     "t=7900 kind=mix-tick severity=0.040467 master=0.6 bedGain=0.3450428 alertGain=0.022256821 duck=0.014163432 layers=0",
     "t=8200 kind=mix-tick severity=0.039429 master=0.6 bedGain=0.34517 alertGain=0.021685753 duck=0.013800024 layers=0",
     "t=8300 kind=mix-tick severity=0.039088 master=0.6 bedGain=0.34521165 alertGain=0.02149867 duck=0.013680973 layers=0",
-    "t=8400 kind=voice-start source=bed wave=square midi=55 freqHz=195.99771 durMs=260 gain=0.34525296 detuneCents=10.670313",
     "t=8500 kind=mix-tick severity=0.038417 master=0.6 bedGain=0.3452939 alertGain=0.021129338 duck=0.013445942 layers=0",
     "t=8800 kind=mix-tick severity=0.037431 master=0.6 bedGain=0.34541467 alertGain=0.020587198 duck=0.013100944 layers=0",
     "t=8850 kind=mix-tick severity=0.037269 master=0.6 bedGain=0.3454345 alertGain=0.020498205 duck=0.013044312 layers=0",
-    "t=9000 kind=voice-start source=bed wave=square midi=57 freqHz=220.0 durMs=260 gain=0.34549344 detuneCents=-10.417175",
     "t=9050 kind=mix-tick severity=0.036629 master=0.6 bedGain=0.34551293 alertGain=0.020146057 duck=0.012820218 layers=0",
+    "t=9050 kind=bed-drone wave=square midi=74 freqHz=580.85016 detuneCents=-19.204966 intervalMs=5235 gain=0.34551293",
     "t=9100 kind=mix-tick severity=0.036471 master=0.6 bedGain=0.34553233 alertGain=0.020058969 duck=0.012764799 layers=0",
     "t=9350 kind=mix-tick severity=0.035689 master=0.6 bedGain=0.34562805 alertGain=0.019629147 duck=0.012491276 layers=0",
     "t=9450 kind=mix-tick severity=0.035381 master=0.6 bedGain=0.34566578 alertGain=0.019459808 duck=0.012383514 layers=0",
-    "t=9600 kind=voice-start source=bed wave=square midi=60 freqHz=261.62558 durMs=260 gain=0.34572172 detuneCents=16.024591",
     "t=9750 kind=mix-tick severity=0.034474 master=0.6 bedGain=0.34577698 alertGain=0.018960506 duck=0.012065777 layers=0",
     "t=10050 kind=mix-tick severity=0.033589 master=0.6 bedGain=0.34588534 alertGain=0.018474016 duck=0.011756192 layers=0",
     "t=10100 kind=mix-tick severity=0.033444 master=0.6 bedGain=0.34590313 alertGain=0.018394157 duck=0.0117053725 layers=0",
-    "t=10200 kind=voice-start source=bed wave=square midi=62 freqHz=293.66476 durMs=260 gain=0.34593847 detuneCents=-6.5439253",
     "t=10350 kind=mix-tick severity=0.032727 master=0.6 bedGain=0.3459909 alertGain=0.018000007 duck=0.011454551 layers=0",
     "t=10450 kind=mix-tick severity=0.032445 master=0.6 bedGain=0.3460255 alertGain=0.017844724 duck=0.011355733 layers=0",
     "t=10700 kind=mix-tick severity=0.03175 master=0.6 bedGain=0.34611067 alertGain=0.017462347 duck=0.011112403 layers=0",
     "t=10800 kind=mix-tick severity=0.031476 master=0.6 bedGain=0.3461442 alertGain=0.017311702 duck=0.011016537 layers=0",
-    "t=10800 kind=voice-start source=bed wave=square midi=64 freqHz=329.62756 durMs=260 gain=0.3461442 detuneCents=-3.2669458",
     "t=11200 kind=mix-tick severity=0.030404 master=0.6 bedGain=0.34627557 alertGain=0.016722001 duck=0.010641273 layers=0",
     "t=11400 kind=mix-tick severity=0.029881 master=0.6 bedGain=0.34633952 alertGain=0.016434727 duck=0.010458463 layers=0",
-    "t=11400 kind=voice-start source=bed wave=square midi=67 freqHz=391.99542 durMs=260 gain=0.34633952 detuneCents=-1.365579",
     "t=11550 kind=mix-tick severity=0.029495 master=0.6 bedGain=0.3463868 alertGain=0.016222516 duck=0.010323418 layers=0",
     "t=11950 kind=mix-tick severity=0.058491 master=0.6 bedGain=0.3428349 alertGain=0.032169916 duck=0.020471765 layers=0",
-    "t=12000 kind=engine-stop fadeMs=400"
+    "t=12000 kind=engine-stop fadeMs=400",
   )
 
   val storm: Vector[String] = Vector(
     "t=0 kind=engine-start name=null",
     "t=0 kind=mix-tick severity=1.0 master=0.6 bedGain=0.2275 alertGain=0.55 duck=0.35 layers=3",
-    "t=0 kind=voice-start source=bed wave=square midi=60 freqHz=261.62558 durMs=260 gain=0.2275 detuneCents=9.161174",
+    "t=0 kind=bed-drone wave=square midi=64 freqHz=334.01044 detuneCents=22.867622 intervalMs=3966 gain=0.2275",
     "t=0 kind=alert-start source=alert wave=saw freqHz=369.99442 durMs=180 gain=0.55 octave=0 live=1",
     "t=150 kind=alert-start source=alert wave=saw freqHz=739.98883 durMs=180 gain=0.55 octave=1 live=2",
     "t=300 kind=alert-start source=alert wave=saw freqHz=739.98883 durMs=180 gain=0.55 octave=1 live=2",
-    "t=600 kind=voice-start source=bed wave=square midi=62 freqHz=293.66476 durMs=260 gain=0.2275 detuneCents=-11.146075",
-    "t=1200 kind=voice-start source=bed wave=square midi=64 freqHz=329.62756 durMs=260 gain=0.2275 detuneCents=20.168613",
-    "t=1800 kind=voice-start source=bed wave=square midi=67 freqHz=391.99542 durMs=260 gain=0.2275 detuneCents=-11.212597",
     "t=2000 kind=mix-tick severity=0.995677 master=0.6 bedGain=0.22802955 alertGain=0.54762244 duck=0.34848702 layers=3",
-    "t=2000 kind=engine-stop fadeMs=400"
+    "t=2000 kind=engine-stop fadeMs=400",
   )
 
   val warnDrift: Vector[String] = Vector(
     "t=0 kind=engine-start name=null",
     "t=0 kind=mix-tick severity=0.36 master=0.6 bedGain=0.3059 alertGain=0.198 duck=0.126 layers=1",
-    "t=0 kind=voice-start source=bed wave=square midi=60 freqHz=261.62558 durMs=260 gain=0.3059 detuneCents=9.161174",
+    "t=0 kind=bed-drone wave=square midi=64 freqHz=334.01044 detuneCents=22.867622 intervalMs=3966 gain=0.3059",
     "t=0 kind=alert-start source=alert wave=saw freqHz=369.99442 durMs=180 gain=0.198 octave=0 live=1",
     "t=50 kind=mix-tick severity=0.358444 master=0.6 bedGain=0.30609062 alertGain=0.19714409 duck=0.12545532 layers=1",
     "t=100 kind=mix-tick severity=0.356894 master=0.6 bedGain=0.30628043 alertGain=0.19629186 duck=0.12491301 layers=1",
@@ -620,5 +646,5 @@ object SchedulerSpec:
     "t=250 kind=mix-tick severity=0.352286 master=0.6 bedGain=0.30684498 alertGain=0.19375727 duck=0.12330008 layers=1",
     "t=250 kind=alert-start source=alert wave=saw freqHz=184.99721 durMs=180 gain=0.19375727 octave=-1 live=1",
     "t=300 kind=mix-tick severity=0.350763 master=0.6 bedGain=0.3070315 alertGain=0.1929197 duck=0.122767076 layers=1",
-    "t=300 kind=engine-stop fadeMs=400"
+    "t=300 kind=engine-stop fadeMs=400",
   )

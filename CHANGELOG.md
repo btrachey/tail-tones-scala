@@ -4,6 +4,27 @@ All notable changes to `tail-tones` are documented here. The format follows
 Keep-a-Changelog conventions; versions are slice-assembled (see
 `IMPLEMENTATION_PLAN.md` §9 for the slice roster).
 
+## Unreleased
+
+### Changed
+
+- **The default bed is now a continuous drone** (S17): one constant 8-bit
+  square tone that slowly, randomly wanders the major-pentatonic pool
+  (C4–A5 ± one octave) — every ~4.5 s (±25 %) the walker picks the next pitch
+  and the mixer crossfades to it over ~1.2 s, the departing and arriving
+  pitches briefly overlapping, so the bed never stops. Rendered additively in
+  the shared mixer (`PcmMixer.mixDrone`, quantized at `bed.bits`, riding
+  `bedGain` — ducking and SIGUSR1 mute apply unchanged), NOT as one-shot
+  voices: alerts can no longer gate the bed. Seeded per `seed` — the whole
+  walk is deterministic for goldens. New `bed` config keys `drone` (default
+  `true`; `false` restores the plan's arpeggio burst grid), `droneIntervalMs`,
+  `droneGlideMs`, `droneOctaveSpan`, `droneJitterCents`,
+  `droneIntervalJitter`. Drone-capable backends (null, ffplay-pipe,
+  alsa-pipe, coreaudio) get the tone; `spawn` keeps the burst grid (per-voice
+  `afplay` children cannot sustain a tone). New `--print-events` kind
+  `bed-drone`; null backend records `drone freqHz=` per publish. See
+  `docs/spikes/S17.md`.
+
 ## 0.1.0 — 2026-11-10
 
 Initial release. `tail-tones` is a `tail` + `tee` + sonification CLI: consume

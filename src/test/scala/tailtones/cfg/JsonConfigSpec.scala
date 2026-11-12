@@ -49,7 +49,13 @@ class JsonConfigSpec extends munit.FunSuite:
         |    "noteDecayMs": 300,
         |    "bits": 5,
         |    "duckOnSeverity": false,
-        |    "duckMax": 0.4
+        |    "duckMax": 0.4,
+        |    "drone": false,
+        |    "droneIntervalMs": 6000,
+        |    "droneGlideMs": 800,
+        |    "droneOctaveSpan": 2,
+        |    "droneJitterCents": 10,
+        |    "droneIntervalJitter": 0.5
         |  },
         |  "alert": {
         |    "waveform": "saw",
@@ -81,6 +87,13 @@ class JsonConfigSpec extends munit.FunSuite:
     assertEquals(c.bed.scale, Scale.MajorPentatonic)
     assertEquals(c.bed.bits, 5)
     assert(!c.bed.duckOnSeverity)
+    // S17 drone keys round-trip through the parser
+    assert(!c.bed.drone)
+    assertEquals(c.bed.droneIntervalMs, 6000L)
+    assertEquals(c.bed.droneGlideMs, 800L)
+    assertEquals(c.bed.droneOctaveSpan, 2)
+    assertEqualsDouble(c.bed.droneJitterCents, 10.0, 1e-12)
+    assertEqualsDouble(c.bed.droneIntervalJitter, 0.5, 1e-12)
     assertEquals(c.alert.waveform, Waveform.Saw)
     assertEquals(c.alert.minIntervalMs, 200L)
     assertEquals(c.alert.maxPolyphony, 2)

@@ -27,7 +27,8 @@ final class MutingEngine(
     underlying: AudioEngine,
     muted: () => Boolean
 ) extends AudioEngine
-    with ChildOwned:
+    with ChildOwned
+    with DroneCapable:
 
   private val silent = MixParams(0f, 0f, 0f, 0f)
 
@@ -41,6 +42,21 @@ final class MutingEngine(
 
   def setBedLoop(spec: Option[BedLoop]): Unit =
     underlying.setBedLoop(spec)
+
+  /** S17 capability resolves through the DELEGATE, not the decorator: Main
+    * wraps every engine here, so a constant `true` would route spawn's bed to
+    * a no-op target (silent bed), and no methods at all would deny the drone
+    * to coreaudio/ffplay in production. The predicate interrogates
+    * `underlying`; targets forward when it sustains a drone, else no-op.
+    */
+  override def sustainsDrone: Boolean = underlying match
+    case d: DroneCapable => d.sustainsDrone
+    case _               => false
+
+  def setDroneTarget(t: Option[DroneTarget]): Unit =
+    underlying match
+      case d: DroneCapable => d.setDroneTarget(t)
+      case _               => ()
 
   def stop(fadeMs: Int): Unit = underlying.stop(fadeMs)
 

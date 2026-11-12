@@ -13,7 +13,8 @@ import scala.collection.mutable
   * the injected [[tailtones.sev.Clock]] by the caller (Scheduler stamps its own
   * events; NullEngine stores what it is handed).
   */
-final class NullEngine extends AudioEngine:
+final class NullEngine extends AudioEngine
+    with DroneCapable:
 
   private val lock = new Object
 
@@ -43,6 +44,15 @@ final class NullEngine extends AudioEngine:
 
   def setBedLoop(spec: Option[BedLoop]): Unit =
     record(s"bedloop ${spec.map(b => b.path.toString).getOrElse("none")}")
+
+  /** S17: capability true (the scheduler keeps the continuous-drone branch
+    * under `--backend null`, matching the streaming backends so
+    * `--print-events` goldens show what the real engines would play), and
+    * every target published is RECORDED — the headless proof the tone is
+    * being driven, exactly like `playVoice` records one-shots.
+    */
+  def setDroneTarget(t: Option[DroneTarget]): Unit =
+    record(NullEngine.droneLine(t))
 
   def stop(fadeMs: Int): Unit =
     lock.synchronized {
@@ -84,3 +94,12 @@ object NullEngine:
     val wave = v.waveform.toString.toLowerCase
     s"voice wave=$wave freqHz=${v.freqHz} durMs=${v.durMs} " +
       s"gain=${v.gain} detuneCents=${v.detuneCents}"
+
+  /** Canonical serialization of one drone target (`drone none` when silent).
+    * Floats print with shortest-round-trip repr like [[paramsLine]]/
+    * [[voiceLine]], so goldens pin the exact walker output.
+    */
+  def droneLine(t: Option[DroneTarget]): String =
+    t match
+      case Some(d) => s"drone freqHz=${d.freqHz}"
+      case None    => "drone none"

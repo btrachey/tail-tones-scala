@@ -360,7 +360,13 @@ object JsonConfig:
         "noteDecayMs",
         "bits",
         "duckOnSeverity",
-        "duckMax"
+        "duckMax",
+        "drone",
+        "droneIntervalMs",
+        "droneGlideMs",
+        "droneOctaveSpan",
+        "droneJitterCents",
+        "droneIntervalJitter"
       ),
       c,
       path
@@ -374,7 +380,28 @@ object JsonConfig:
         bits <- opt(o, "bits", c, path, 4)(int)
         duck <- opt(o, "duckOnSeverity", c, path, true)(bool)
         duckMax <- opt(o, "duckMax", c, path, 0.35)(num)
-      yield BedSection(wf, tempo, scale, vol, decay, bits, duck, duckMax)
+        drone <- opt(o, "drone", c, path, true)(bool)
+        droneInt <- opt(o, "droneIntervalMs", c, path, 4500L)(long)
+        droneGlide <- opt(o, "droneGlideMs", c, path, 1200L)(long)
+        droneOct <- opt(o, "droneOctaveSpan", c, path, 1)(int)
+        droneJit <- opt(o, "droneJitterCents", c, path, 25.0)(num)
+        droneIJit <- opt(o, "droneIntervalJitter", c, path, 0.25)(num)
+      yield BedSection(
+        wf,
+        tempo,
+        scale,
+        vol,
+        decay,
+        bits,
+        duck,
+        duckMax,
+        drone,
+        droneInt,
+        droneGlide,
+        droneOct,
+        droneJit,
+        droneIJit
+      )
     }
 
   private def alertSection(

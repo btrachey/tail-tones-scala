@@ -44,7 +44,28 @@ final case class BedSection(
     noteDecayMs: Long = 260L,
     bits: Int = 4,
     duckOnSeverity: Boolean = true,
-    duckMax: Double = 0.35
+    duckMax: Double = 0.35,
+    /** Default bed: one continuous pentatonic tone that slowly moves between
+      * scale pitches (random walk, octave offsets allowed, brief overlap
+      * during the glide). `false` restores the plan's one-shot arpeggiator
+      * burst grid. Non-streaming backends (`spawn`) always use the burst
+      * grid — they cannot sustain a tone.
+      */
+    drone: Boolean = true,
+    /** Nominal dwell on one pitch before the walker moves (± jitter below). */
+    droneIntervalMs: Long = 4500L,
+    /** Length of the pitch move: old voice fades out while the new one glides
+      * in from it — the two overlap for this window.
+      */
+    droneGlideMs: Long = 1200L,
+    /** Pitch pool registration: octave offsets ∈ [−span, +span]. */
+    droneOctaveSpan: Int = 1,
+    /** Per-move seeded detune jitter, cents (same family as the bed
+      * arpeggiator's 25 c).
+      */
+    droneJitterCents: Double = 25.0,
+    /** ±fraction applied to the dwell time (never below 500 ms). */
+    droneIntervalJitter: Double = 0.25
 )
 
 /** Plan §4.1 `alert` section (saw alerts, §6.4/§7.2). */
@@ -131,6 +152,12 @@ final case class ConfigCliOverrides(
     bedBits: Option[Int] = None,
     bedDuckOnSeverity: Option[Boolean] = None,
     bedDuckMax: Option[Double] = None,
+    bedDrone: Option[Boolean] = None,
+    bedDroneIntervalMs: Option[Long] = None,
+    bedDroneGlideMs: Option[Long] = None,
+    bedDroneOctaveSpan: Option[Int] = None,
+    bedDroneJitterCents: Option[Double] = None,
+    bedDroneIntervalJitter: Option[Double] = None,
     alertWaveform: Option[Waveform] = None,
     alertVolume: Option[Double] = None,
     alertMinIntervalMs: Option[Long] = None,
@@ -195,7 +222,17 @@ object Config:
         noteDecayMs = o.bedNoteDecayMs.getOrElse(base.bed.noteDecayMs),
         bits = o.bedBits.getOrElse(base.bed.bits),
         duckOnSeverity = o.bedDuckOnSeverity.getOrElse(base.bed.duckOnSeverity),
-        duckMax = o.bedDuckMax.getOrElse(base.bed.duckMax)
+        duckMax = o.bedDuckMax.getOrElse(base.bed.duckMax),
+        drone = o.bedDrone.getOrElse(base.bed.drone),
+        droneIntervalMs =
+          o.bedDroneIntervalMs.getOrElse(base.bed.droneIntervalMs),
+        droneGlideMs = o.bedDroneGlideMs.getOrElse(base.bed.droneGlideMs),
+        droneOctaveSpan =
+          o.bedDroneOctaveSpan.getOrElse(base.bed.droneOctaveSpan),
+        droneJitterCents =
+          o.bedDroneJitterCents.getOrElse(base.bed.droneJitterCents),
+        droneIntervalJitter =
+          o.bedDroneIntervalJitter.getOrElse(base.bed.droneIntervalJitter)
       ),
       alert = base.alert.copy(
         waveform = o.alertWaveform.getOrElse(base.alert.waveform),
@@ -301,6 +338,21 @@ object Config:
         s"must be in ${Quantizer.MinBits}..${Quantizer.MaxBits}, got ${c.bed.bits}"
       )
     frac("bed.duckMax", c.bed.duckMax)
+    posL("bed.droneIntervalMs", c.bed.droneIntervalMs)
+    posL("bed.droneGlideMs", c.bed.droneGlideMs)
+    if c.bed.droneOctaveSpan < 0 || c.bed.droneOctaveSpan > 2 then
+      bad(
+        "bed.droneOctaveSpan",
+        s"must be in 0..2, got ${c.bed.droneOctaveSpan}"
+      )
+    nonNeg("bed.droneJitterCents", c.bed.droneJitterCents)
+    if
+      c.bed.droneIntervalJitter.isNaN || c.bed.droneIntervalJitter < 0.0 || c.bed.droneIntervalJitter >= 1.0
+    then
+      bad(
+        "bed.droneIntervalJitter",
+        s"must be in [0,1), got ${c.bed.droneIntervalJitter}"
+      )
     frac("alert.volume", c.alert.volume)
     nonNegL("alert.minIntervalMs", c.alert.minIntervalMs)
     nonNegL("alert.burstCooldownMs", c.alert.burstCooldownMs)

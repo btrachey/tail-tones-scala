@@ -91,7 +91,8 @@ final class CoreAudioEngine(
       */
     startPollThread: Boolean = true
 ) extends AudioEngine
-    with ChildOwned:
+    with ChildOwned
+    with DroneCapable:
 
   require(numBuffers > 0 && numBuffers <= AudioQueue.MaxBuffers)
   require(bufferFrames > 0)
@@ -241,6 +242,8 @@ final class CoreAudioEngine(
     mixer.layersFromMix(p)
   def playVoice(v: Voice): Unit = mixer.playVoice(v)
   def setBedLoop(spec: Option[BedLoop]): Unit = mixer.setBedLoop(spec)
+  /** S17: scheduler thread; the mixer poll consumes it (see PcmMixer.mixDrone). */
+  def setDroneTarget(t: Option[DroneTarget]): Unit = mixer.setDroneTarget(t)
   def name: String = "coreaudio"
 
   // ------------------------------------------------------------------- stop
@@ -358,6 +361,9 @@ final class CoreAudioEngine(
                 underrunSilence.incrementAndGet()
               java.util.Arrays.fill(fillBuf, 0.toShort)
               bufferFrames
+        // S17: additive drone (see PipeEngine.mixerLoop) — summed into the
+        // chosen frames, never a slot in the priority chain.
+        mixer.mixDrone(fillBuf, frames)
         mixer.applyMasterFade(fillBuf, frames)
         ops.fillBuffer(buffers(slot), fillBuf, frames)
         ops.stampFill(st, slot, ops.hostTime())
@@ -399,6 +405,7 @@ final class CoreAudioEngine(
                 else
                   java.util.Arrays.fill(fillBuf, 0.toShort)
                   bufferFrames
+            mixer.mixDrone(fillBuf, frames)
             mixer.applyMasterFade(fillBuf, frames)
             ops.fillBuffer(buffers(slot), fillBuf, frames)
             ops.stampFill(st.get, slot, ops.hostTime())

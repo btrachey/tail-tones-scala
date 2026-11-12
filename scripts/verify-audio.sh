@@ -207,7 +207,7 @@ printf '\ntail-tones §8 audio verification — binary: %s · backend: %s · %s 
   "$BIN" "$BACKEND" "$([[ $AUTO -eq 1 ]] && echo AUTO || echo INTERACTIVE)"
 
 # ------------------------------------------------------ 1/7 builtin bed
-step_head "1/7 builtin bed consonant" "clean consonant chiptune bed; NO detune, NO alerts (plan §7.3 row 1: 10 info/min → S≈0.06)"
+step_head "1/7 builtin bed consonant" "S17: continuous pentatonic tone that slowly glides between pitches (crossfades overlap, never stops, no pulses); NO detune, NO alerts (plan §7.3 row 1: 10 info/min → S≈0.06). spawn/backend=spawn plays the burst grid instead."
 F="$TMPD/bed.fifo"; mkfifo "$F"
 feed "$TMPD/healthy10.in" 6 > "$F" & GEN=$!; disown $GEN   # 10 info/min (plan §7.3 row 1)
 start_step bed "$F" --backend "$BACKEND" --print-events
@@ -217,10 +217,13 @@ kill -TERM "$PID" 2>/dev/null
 wait_step bed; [[ "$RC" == "0" ]] && ok "bed: clean exit 0 after TERM" || bad "bed: exit $RC after TERM"
 check_tee bed "$TMPD/healthy10.in"; kill "$GEN" 2>/dev/null
 err_grep bed "kind=engine-start .*name=" "engine-start emitted"
-err_grep bed "kind=voice-start .*source=bed" "bed voices scheduled (bedGain>0)"
+# S17: the default bed is the CONTINUOUS drone on streaming backends
+# (bed-drone events); the one-shot burst grid (voice-start source=bed) is
+# the spawn fallback / bed.drone=false path — accept either as "bed is on".
+err_grep bed "kind=voice-start .*source=bed|kind=bed-drone" "bed scheduled (bedGain>0: drone or burst grid)"
 err_grep bed "kind=alert-start" "NO alerts while healthy" neg
 check_orphans "bed"
-listen "bed consonant & alert-free while healthy?"
+listen "bed a CONSTANT tone, consonant, slowly wandering the pentatonic scale; glide transitions smooth (no click/zip), no gaps/pulses; alert-free while healthy?"
 
 # ------------------------------------------------------ 2/7 warn detune
 step_head "2/7 warn detune audible" "≈6 warn/min steady-state hits S≈0.35 (plan §7.3 row 3) → FIRST detune layer: audible beat/roughness over the bed. This step runs 8 warn at 3 s spacing (~24 s window) so layers>=1 is checkable in one pause."

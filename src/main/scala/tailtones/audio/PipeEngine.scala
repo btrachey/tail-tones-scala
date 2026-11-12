@@ -65,7 +65,8 @@ abstract class PipeEngine(
       tailtones.audio.BedLoop => Either[String, MediaBed.Prepared]
     ] = None
 ) extends AudioEngine
-    with ChildOwned:
+    with ChildOwned
+    with DroneCapable:
 
   require(drainChunkFrames > 0 && drainSleepMs >= 0)
 
@@ -159,6 +160,9 @@ abstract class PipeEngine(
 
   def setBedLoop(spec: Option[BedLoop]): Unit = mixer.setBedLoop(spec)
 
+  /** S17: scheduler thread; the drain thread consumes it (see PcmMixer.mixDrone). */
+  def setDroneTarget(t: Option[DroneTarget]): Unit = mixer.setDroneTarget(t)
+
   // ---------------------------------------------------------------- stop
 
   def stop(fadeMs: Int): Unit =
@@ -246,6 +250,10 @@ abstract class PipeEngine(
                     0.toShort
                   )
                   drainChunkFrames
+            // S17: the drone is ADDITIVE on top of whatever was chosen above
+            // — never a priority slot, so alerts/media never gate the bed
+            // tone (a non-empty ring must not silence it; docs/advisory).
+            mixer.mixDrone(drainBuf, frames)
             mixer.applyMasterFade(drainBuf, frames)
             sink.write(drainBuf, frames)
           }

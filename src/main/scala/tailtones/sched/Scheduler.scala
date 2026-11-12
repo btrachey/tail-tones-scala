@@ -8,7 +8,14 @@ import tailtones.audio.{AudioEngine, BedLoop, MixParams, Voice}
 import tailtones.cfg.Config
 import tailtones.model.{Level, Mode}
 import tailtones.sev.{Clock, RateGuard, Severity}
-import tailtones.synth.{AlertShape, Arpeggiator, DissonanceLayers, Notes}
+import tailtones.synth.{
+  AlertShape,
+  Arpeggiator,
+  DissonanceLayers,
+  DroneWalker,
+  Notes,
+  Scale
+}
 
 /** Extra tunables the plan leaves to the scheduler (§6.2/§6.4). All defaults
   * are the plan's; tests override for lockstep driving.
@@ -130,6 +137,38 @@ final class Scheduler(
     new Arpeggiator(Notes.bedNotes(), opts.seed)
   private val rng = new scala.util.Random(opts.seed ^ 0x5deece66dL)
 
+  // == S17 continuous bed drone ==
+  // Capability resolved ONCE at construction: the engine (Main's MutingEngine
+  // wrapper) answers for its delegate, so spawn / spawn-under-mute resolve to
+  // None → the arpeggiator burst grid below keeps running for it. null +
+  // streaming backends resolve to Some → the default bed becomes one
+  // continuous tone the walker walks around the scale. Own RNG stream
+  // (Arpeggiator pattern), so alert/octave draws stay bit-identical.
+  private val bedPool: IndexedSeq[Int] =
+    Scale.notesInRange(
+      config.bed.scale,
+      Notes.BedRootMidi,
+      Notes.BedLowMidi,
+      Notes.BedHighMidi
+    )
+  private val droneEngine: Option[tailtones.audio.DroneCapable] =
+    if config.bed.drone && bedPool.length > 1 then
+      engine match
+        case d: tailtones.audio.DroneCapable if d.sustainsDrone => Some(d)
+        case _                                                  => None
+    else None
+  private val droneWalker =
+    new DroneWalker(
+      bedPool,
+      opts.seed ^ 0x0d20ea7cL,
+      jitterCents = config.bed.droneJitterCents,
+      octaveSpan = config.bed.droneOctaveSpan,
+      intervalJitter = config.bed.droneIntervalJitter
+    )
+  private var nextDroneMs = -1L
+  /** What the engine currently holds; drives the publish/silence edges. */
+  private var dronePublished: Option[tailtones.audio.DroneTarget] = None
+
   // == MPSC level queue (reader threads → scheduler thread) ==
   // Two-buffer swap under one monitor: submit is O(1) for producers, drain is
   // one lock acquisition per tick for the consumer. Contention is negligible
@@ -192,6 +231,8 @@ final class Scheduler(
         emit("bedloop", s"path=$p")
       }
     nextBedMs = clock.now()
+    nextDroneMs = clock.now()
+    dronePublished = None
     nextDeadline = clock.now()
     lastEmittedMix = None
     broughtUp = true
@@ -292,8 +333,18 @@ final class Scheduler(
     // tee + classification never route through here (reader threads), so
     // stdout fidelity is structurally unaffected.
     if !opts.muted() then
-      scheduleBed(params, now)
+      // S17: on drone-capable engines the bed is the CONTINUOUS tone — the
+      // walker republishes a pitch every dwell and the engine crossfades;
+      // the one-shot burst grid is the fallback (spawn / bed.drone=false).
+      if droneEngine.isDefined then scheduleBedDrone(params, now)
+      else scheduleBed(params, now)
       scheduleAlerts(s, params)
+    else
+      // Mirror the grid's mute policy for the drone: pull the target so a
+      // scheduler-mute WITHOUT the MutingEngine wrapper (standalone users)
+      // still silences the tone. Under Main's MutingEngine the zeroed mix
+      // already inaudibilizes it; pulling the target too is idempotent.
+      silenceDrone()
     ticksDone += 1
     nextDeadline += tickMs
 
@@ -303,6 +354,41 @@ final class Scheduler(
       if m.isNaN || m < 0.0 then 0.0 else if m > 1.0 then 1.0 else m
     if clamped == p.master.toDouble then p
     else p.copy(master = clamped.toFloat)
+
+  private def scheduleBedDrone(params: MixParams, now: Long): Unit =
+    droneEngine.foreach { de =>
+      if isBuiltin && params.bedGain > 0f then
+        // Publish on the FIRST eligible tick and at every dwell boundary;
+        // the engine crossfades from the current pitch to the new one. One
+        // walker step per eligible tick — a wedged/late tick republishes
+        // once, never bursts (jitter-tolerant bed, same policy as the grid).
+        if dronePublished.isEmpty || now >= nextDroneMs then
+          val step = droneWalker.next(config.bed.droneIntervalMs)
+          val target = tailtones.audio.DroneTarget(
+            Notes.freqDetuned(step.midi, step.detuneCents).toFloat
+          )
+          de.setDroneTarget(Some(target))
+          dronePublished = Some(target)
+          emit(
+            "bed-drone",
+            s"wave=${cfgWave(config.bed.waveform)} midi=${step.midi} " +
+              s"freqHz=${target.freqHz} detuneCents=${step.detuneCents.toFloat} " +
+              s"intervalMs=${step.intervalMs} gain=${params.bedGain}"
+          )
+          nextDroneMs = now + step.intervalMs
+      else if dronePublished.isDefined then
+        // duckMax=1 at S=1 (or a runtime bedGain→0): silence the tone. No
+        // event — the mix-tick already shows bedGain=0.
+        silenceDrone()
+    }
+
+  /** Pull the published target (mute / bedGain→0). No event: the mix-tick
+    * already carries the gain truth.
+    */
+  private def silenceDrone(): Unit =
+    if dronePublished.isDefined then
+      droneEngine.foreach(_.setDroneTarget(None))
+      dronePublished = None
 
   private def scheduleBed(params: MixParams, now: Long): Unit =
     if isBuiltin && params.bedGain > 0f && now >= nextBedMs then
