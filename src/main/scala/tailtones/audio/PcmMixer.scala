@@ -212,6 +212,14 @@ final class PcmMixer(
   private var attackTotal = 1
 
   private val DroneMinSecondRatio = 1.0594630943592953 // 2^(1/12)
+  /** S17-R calm drone: the bed pair is two sines a PERFECT FOURTH apart
+    * (f, 4/3·f). Fourth ratio is exact-ratio (just intonation) — consonant
+    * by construction, unlike the equal-tempered 5-semi step. */
+  private[audio] val DroneFourthRatio = 4.0 / 3.0
+  /** Per-partial gain of the two calm sines. Chord was square .50 + triangle
+    * sub .25 (RMS ≈ 0.52); pair at 0.35 each → RMS ≈ 0.35, ~−3.5 dB, and
+    * sines carry no square-harmonic brightness (docs/spikes/S17.md §H). */
+  private[audio] val DronePairGain = 0.35f
 
   /** Scheduler thread; consumed stale-tolerantly by the drain thread.
     * `None` = silent. NOT the mute mechanism (mute zeroes `bedGain` through
@@ -263,14 +271,9 @@ final class PcmMixer(
           val sr = AudioFormat.SampleRate.toDouble
           val layers = layersRef.get()
           val bits = cfg.bed.bits
-          val mainWave = cfg.bed.waveform
-          val subWave =
-            if layers.sawUnderBed then tailtones.synth.Waveform.Saw
-            else tailtones.synth.Waveform.Triangle
           val detCents = layers.detuneCents
           val minOn = layers.minorSecondPartner
-          val useMain = tailtones.synth.Voice.MainGain
-          val useSub = tailtones.synth.Voice.SubGain
+          val sawUnder = layers.sawUnderBed
           val useDet =
             if detCents != 0.0 then tailtones.synth.Voice.DetuneGain else 0f
           val useMin =
@@ -303,27 +306,29 @@ final class PcmMixer(
                 glideFromHz + (glideToHz - glideFromHz) * prog.toDouble
               else bFreq
             // advance BOTH active oscillators every frame (§: never gate the
-            // clock on gain or frame source)
+            // clock on gain or frame source). Voice = sine PAIR (f, 4/3·f) +
+            // severity grit partials; the fourth renders as saw when
+            // sawUnderBed (error territory) so the §7.3 roughness survives.
             if fA > 0.0 then
               ap0 = Osc.advance(ap0, (fA / sr).toFloat)
-              ap1 = Osc.advance(ap1, (fA * 0.5 / sr).toFloat)
-              if detRatio != 1.0 then
+              ap1 = Osc.advance(ap1, (fA * DroneFourthRatio / sr).toFloat)
+              if useDet > 0f then
                 ap2 = Osc.advance(ap2, (fA * detRatio / sr).toFloat)
               if minOn then
                 ap3 = Osc.advance(ap3, (fA * DroneMinSecondRatio / sr).toFloat)
             if fB > 0.0 then
               bp0 = Osc.advance(bp0, (fB / sr).toFloat)
-              bp1 = Osc.advance(bp1, (fB * 0.5 / sr).toFloat)
-              if detRatio != 1.0 then
+              bp1 = Osc.advance(bp1, (fB * DroneFourthRatio / sr).toFloat)
+              if useDet > 0f then
                 bp2 = Osc.advance(bp2, (fB * detRatio / sr).toFloat)
               if minOn then
                 bp3 = Osc.advance(bp3, (fB * DroneMinSecondRatio / sr).toFloat)
             if g > 0f && (wA > 0f || wB > 0f) then
               var out = 0f
               if wA > 0f && fA > 0.0 then
-                out += chord(ap0, ap1, ap2, ap3, mainWave, subWave, useMain, useSub, useDet, useMin, detRatio) * wA
+                out += droneVoice(ap0, ap1, ap2, ap3, sawUnder, useDet, useMin) * wA
               if wB > 0f && fB > 0.0 then
-                out += chord(bp0, bp1, bp2, bp3, mainWave, subWave, useMain, useSub, useDet, useMin, detRatio) * wB
+                out += droneVoice(bp0, bp1, bp2, bp3, sawUnder, useDet, useMin) * wB
               var amp = 1f
               if attackRem > 0 then
                 amp = attackRem.toFloat / attackTotal.toFloat
@@ -421,30 +426,32 @@ final class PcmMixer(
         bp3 = ap3
     appliedFreq = newHz
 
-  /** One voice's chord at fixed phases: main + sub-octave + severity
-    * detune/minor-2nd partners. Each phase was advanced independently at its
-    * own increment (derived phases from a wrapping main phase would step
+  /** One calm drone voice at fixed phases: two SINES a perfect fourth apart
+    * (f, 4/3·f — exact-ratio consonance, docs/spikes/S17.md §H), each at
+    * [[DronePairGain]]. Severity adds sine "grit" partials — detuned partner
+    * + minor-2nd — and `sawUnderBed` (error territory) renders the FOURTH as
+    * a saw, so §7.3's "roughness on top of the bed" survives while the bed
+    * itself stays soft. Each phase advances independently at its own
+    * increment (derived phases from a wrapping main phase would step
     * discontinuously at every wrap — independent advance is the only
     * click-free option).
     */
-  private def chord(
+  private def droneVoice(
       p0: Float,
       p1: Float,
       p2: Float,
       p3: Float,
-      mainWave: tailtones.synth.Waveform,
-      subWave: tailtones.synth.Waveform,
-      useMain: Float,
-      useSub: Float,
+      sawUnder: Boolean,
       useDet: Float,
-      useMin: Float,
-      detRatio: Double
+      useMin: Float
   ): Float =
-    var out = Osc.sample(mainWave, p0) * useMain
-    out += Osc.sample(subWave, p1) * useSub
-    if useDet > 0f && detRatio != 1.0 then
-      out += Osc.sample(mainWave, p2) * useDet
-    if useMin > 0f then out += Osc.sample(mainWave, p3) * useMin
+    val fourthWave =
+      if sawUnder then tailtones.synth.Waveform.Saw
+      else tailtones.synth.Waveform.Sine
+    var out = Osc.sample(tailtones.synth.Waveform.Sine, p0) * DronePairGain
+    out += Osc.sample(fourthWave, p1) * DronePairGain
+    if useDet > 0f then out += Osc.sample(tailtones.synth.Waveform.Sine, p2) * useDet
+    if useMin > 0f then out += Osc.sample(tailtones.synth.Waveform.Sine, p3) * useMin
     out
 
   // ------------------------------------------------------------------- bed

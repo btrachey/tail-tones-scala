@@ -37,6 +37,50 @@ class PcmMixerDroneSpec extends munit.FunSuite:
   private def maxAbs(xs: Iterable[Short]): Int =
     xs.foldLeft(0)((a, v) => math.max(a, math.abs(v.toInt)))
 
+  /** Goertzel |X[k]| over the whole window. N = 44100 = 1 s at 44.1 kHz, so
+    * an INTEGER frequency IS a bin (k = hz) — bin-aligned sines are exactly
+    * orthogonal, no leakage window needed. */
+  private def goertzel(xs: Iterable[Int], k: Int): Double =
+    val n = xs.size
+    val w = 2.0 * math.Pi * k / n
+    val c = 2.0 * math.cos(w)
+    var s1 = 0.0
+    var s2 = 0.0
+    for x <- xs do
+      val t = x.toDouble + c * s1 - s2
+      s2 = s1
+      s1 = t
+    math.sqrt(math.max(0.0, s1 * s1 + s2 * s2 - c * s1 * s2))
+
+  test("S17-R SPECTRAL: sine pair a perfect fourth apart — nothing else") {
+    // The user's whole ask. Energy-only assertions cannot catch this: on the
+    // 4-bit grid quantize(0.70) == quantize(0.75), so the DELETED square+
+    // sub-octave chord renders byte-identically at the fundamental's bin.
+    // Projection at the bins distinguishes them (predictively verified):
+    // old chord measures sub/fund ≈ 0.29, 3f/fund ≈ 0.33, fourth-bin ≈ 0.00.
+    val f = 261.0 // integer Hz = integer bin (N = 44100)
+    val fourth = f * 4.0 / 3.0 // 348 — also an integer bin (just fourth)
+    val m = mixerWith(0.5f)
+    m.setDroneTarget(Some(DroneTarget(f.toFloat)))
+    drain(m, 10) // settle past the attack ramp (220 frames)
+    val xs = drain(m, 100).map(_.toInt) // exactly 44100 samples = 1 s
+    val fund = goertzel(xs, f.toInt)
+    assert(fund > 1e6, s"no fundamental energy: $fund")
+    val four = goertzel(xs, fourth.toInt)
+    val sub = math.max(goertzel(xs, (f / 2).toInt), goertzel(xs, (f / 2).toInt + 1))
+    val h2 = goertzel(xs, (2 * f).toInt) // 522
+    val h3 = goertzel(xs, (3 * f).toInt) // 783
+    val dc = goertzel(xs, 0)
+    assert(
+      four >= 0.5 * fund,
+      s"fourth weak: |G(348)|=$four vs |G(261)|=$fund (${four / fund})"
+    )
+    assert(sub <= 0.10 * fund, s"sub-octave present (chord regression): ${sub / fund}")
+    assert(h2 <= 0.10 * fund, s"square-family 2f present: ${h2 / fund}")
+    assert(h3 <= 0.10 * fund, s"square-family 3f present: ${h3 / fund}")
+    assert(dc <= 0.10 * fund, s"DC offset (25% duty regression): ${dc / fund}")
+  }
+
   test("no target ever published → total silence (media/alert-only start state)") {
     val m = mixerWith(0.5f)
     assertEquals(drain(m, 20).exists(_ != 0.toShort), false)

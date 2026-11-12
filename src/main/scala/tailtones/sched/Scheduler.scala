@@ -371,7 +371,11 @@ final class Scheduler(
           dronePublished = Some(target)
           emit(
             "bed-drone",
-            s"wave=${cfgWave(config.bed.waveform)} midi=${step.midi} " +
+            // wave=sine: the calm drone renders a sine pair (f, 4/3·f)
+            // regardless of bed.waveform — that knob stays honest to the
+            // BURST grid (renderBedNote), not the drone.
+            "wave=sine " +
+              s"midi=${step.midi} " +
               s"freqHz=${target.freqHz} detuneCents=${step.detuneCents.toFloat} " +
               s"intervalMs=${step.intervalMs} gain=${params.bedGain}"
           )

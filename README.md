@@ -1,10 +1,10 @@
 # tail-tones
 
 `tail` + `tee` + sonification. Pipe your application's logs through
-`tail-tones` and **hear** its health: a constant 8-bit chiptune bed — one
-continuous pentatonic tone that slowly, randomly glides between the scale's
-pitches (octave offsets included) — while things are healthy, dissonant
-saw-wave alerts as warns and errors stack up.
+`tail-tones` and **hear** its health: a calm constant bed — one continuous
+tone (a pair of sine waves a perfect fourth apart) that slowly, randomly
+glides between the pentatonic scale's pitches while things are healthy,
+dissonant saw-wave alerts as warns and errors stack up.
 Every consumed line is echoed to stdout byte-for-byte — `tail-tones` never
 touches your log stream.
 
@@ -12,7 +12,7 @@ touches your log stream.
 yourapp 2>&1 | tail-tones
 ```
 
-- **builtin** mode — built-in chiptune bed is the "good" sound.
+- **builtin** mode — built-in calm continuous bed is the "good" sound.
 - **media** mode — your own audio file loops as the good bed; saw dissonance
   layers on top.
 - **alert-only** mode — total silence while healthy; only the bad layer plays,
@@ -102,14 +102,16 @@ All examples below run verbatim from the repo root after `scripts/install.sh`
 the human-listening demos — run `scripts/verify-audio.sh` for the guided
 checklist.
 
-### 1. builtin (default) — continuous chiptune bed
+### 1. builtin (default) — calm continuous bed
 
-The bed is ONE continuous tone: a seeded random walk over the major-pentatonic
-pool (C4–A5 ± one octave, so the five sounding pitches wander). Every ~4.5 s
-the walker picks the next pitch and the mixer crossfades to it over ~1.2 s —
-the old note fades out while the new one glides in from it, so the two briefly
-overlap and the tone never stops. Warns add detuned dissonance layers, errors
-fire saw-wave alerts:
+The bed is ONE continuous tone — two sine waves a **perfect fourth** apart
+(f and 4⁄3·f, just intonation, no 8-bit chord grit at rest) rooted on a
+seeded random walk over the major-pentatonic pool (C4–A5). Every ~15 s the
+walker picks the next pitch and the mixer crossfades to it over ~3 s — the
+old pair fades out while the new one glides in from it, so the two briefly
+overlap and the tone never stops. Only at warn/error severity does it gain
+detuned grit (and a saw under the fourth at error level); severity also
+ducks it. Errors fire saw-wave alerts on top:
 
 ```sh
 printf '2026-11-09 10:00:00,100 INFO request served path=/health\n2026-11-09 10:00:00,200 INFO request served path=/api\n' | tail-tones --print-events -q
@@ -118,11 +120,12 @@ printf '2026-11-09 10:00:00,100 INFO request served path=/health\n2026-11-09 10:
 The tone is ADDITIVE: inside builtin mode it keeps sounding under alert
 bursts — the ring can never gate it. (Media mode is unchanged: your file IS
 the bed and the drone stays silent there; alert-only silences both.) Tune
-(or disable — `"drone": false` restores the plan's one-shot arpeggio burst
-grid; the `spawn` backend always uses the grid because per-voice `afplay`
-children can't sustain a tone) via the `bed` config keys `drone`,
-`droneIntervalMs`, `droneGlideMs`, `droneOctaveSpan`, `droneJitterCents`,
-`droneIntervalJitter`.
+(or disable — `"drone": false` restores the plan's one-shot square-chord
+arpeggio burst grid, louder and at `bed.volume`/`bed.waveform`; the `spawn`
+backend always uses that grid because per-voice `afplay` children can't
+sustain a tone) via the `bed` config keys `drone`, `droneIntervalMs`,
+`droneGlideMs`, `droneOctaveSpan` (set 1–2 for octave jumps),
+`droneJitterCents`, `droneIntervalJitter`; loudness is `bed.volume`.
 
 `--print-events` prints the scheduler's event stream to stderr
 (`kind=level`/`mix-tick`/`bed-drone`/`voice-start`/`alert-start`/
@@ -187,17 +190,17 @@ the default shown here (the full reference set, plan §4.1):
     "waveform": "square",
     "tempoBpm": 100,
     "scale": "majorPentatonic",
-    "volume": 0.35,
+    "volume": 0.20,
     "noteDecayMs": 260,
     "bits": 4,
     "duckOnSeverity": true,
     "duckMax": 0.35,
     "drone": true,
-    "droneIntervalMs": 4500,
-    "droneGlideMs": 1200,
-    "droneOctaveSpan": 1,
-    "droneJitterCents": 25,
-    "droneIntervalJitter": 0.25
+    "droneIntervalMs": 15000,
+    "droneGlideMs": 3000,
+    "droneOctaveSpan": 0,
+    "droneJitterCents": 6,
+    "droneIntervalJitter": 0.15
   },
 
   "alert": {
@@ -333,7 +336,7 @@ the cited spike sections:
 | Coreaudio latency measurement | §9 S15 row: latency ≤ 50 ms; the planning notes assumed the AudioQueue buffer's `mPacketStartTime` field | that field does not exist in the macOS SDK (iOS-only struct variant); latency is measured with the documented equivalent `done − fill − bufferDuration` in the mach-time domain, sampled at every mixer refill — steady-state max 40.6 ms (budget 50 ms) | the completion callback fires when the device has finished consuming a buffer, so device-start ≈ done − bufferDuration. [`docs/spikes/S15.md` §D] |
 | Coreaudio ring sizing | §6.7: pre-allocated ring 4×4410 samples (~400 ms) | 5 buffers × 441 frames (10 ms each, 50 ms on-device, ≈100 callbacks/s) | S15 §B corrected the callback-rate arithmetic first written down against the plan's sizing (4410 frames at 44.1 kHz is 100 ms ⇒ 10 callbacks/s, not ≈24), and steady latency is ≈ (depth−1)×bufferDuration — 100 ms buffers sit far outside the 50 ms budget; the soak chose depth 5 (40.6 ms; depth 6 read 51.3 ms). [`docs/spikes/S15.md` §B/§G] |
 | Neutral-line liveliness | §11.1 open question: strictly silent, or a tiny (~0.01) "bed liveliness" rate? | resolved: strictly silent — no liveliness trickle; `severity.rates.neutral` stays available as the tuning knob (default 0) | a trickle would tie severity — and every event golden — to how much unlevelled chatter the user pipes in; no "too quiet a bed" evidence exists (the bed is time-driven, not traffic-driven). [`docs/spikes/S14.md` §E.1] |
-| Default bed shape | §6.4: ascending pentatonic arpeggio, one-shot 260 ms notes on a 600 ms tempo grid | **continuous** tone: seeded random walk over the scale (±1 octave), dwell ~4.5 s ±25 %, ~1.2 s two-voice crossfade with the pitches briefly overlapping — rendered additively in the shared mixer (`PcmMixer.mixDrone`), NOT as one-shot voices: the 400 ms drop-newest ring structurally cannot carry multi-second samples, and an additive mix means alerts can never gate the bed. `bed.drone=false` restores the plan grid; `spawn` (per-voice afplay) always uses the grid. New event kind `bed-drone`; walker deterministic per seed | user request 2026-11-11 (default = constant tone that slowly moves between pitches); the burst grid survives as the fallback and stays pinned by SchedulerSpec/ModeSignalSpec |
+| Default bed shape | §6.4: ascending pentatonic arpeggio, one-shot 260 ms square-chord notes on a 600 ms tempo grid | **continuous calm tone**: sine pair a perfect fourth apart (f, 4⁄3·f) rooted on a seeded random walk over the scale, dwell ~15 s ±15 %, ~3 s two-voice crossfade with the pitches briefly overlapping; `bed.volume` 0.35→0.20 (constant-duty bed ≈ 57 % louder perceived at old gain) — rendered additively in the shared mixer (`PcmMixer.mixDrone`), NOT as one-shot voices: the 400 ms drop-newest ring structurally cannot carry multi-second samples, and an additive mix means alerts can never gate the bed. Severity grit (detuned partner/minor-2nd, saw under the fourth) still enters via `layersRef`. `bed.drone=false` restores the plan grid; `spawn` (per-voice afplay) always uses the grid. New event kind `bed-drone`; walker deterministic per seed | user request 2026-11-11 (constant tone that slowly moves between pitches; then sine fourth-pair, slower, quieter). The burst grid survives as the fallback and stays pinned by SchedulerSpec/ModeSignalSpec. [`docs/spikes/S17.md` §A–H] |
 
 ## Troubleshooting
 
@@ -431,8 +434,9 @@ TAIL_TONES_BACKEND=spawn TAIL_TONES_AFPLAY=/tmp/ttfake/afplay TAIL_TONES_FFPLAY=
 **Human-listening matrix** (`docs/spikes/S14.md` §D + S15 rows) — these 11
 listen items are UNVERIFIED-BY-AGENT (the CI box's audio capture is TCC-silent);
 run `scripts/verify-audio.sh` with the named backends and tick them off:
-bed a CONSTANT tone that slowly wanders the pentatonic scale, never gated by
-alerts, click-free through the crossfades (auto/coreaudio; spawn = burst grid),
+bed a CONSTANT, QUIET tone — pure sine fourth-pair (no chiptune buzz), slowly
+wandering the pentatonic scale, never gated by alerts, click-free through the
+crossfades (auto/coreaudio; spawn = burst grid),
 warn detune enters ~60–75 s in, error saw
 distinct and paced (≤ ~2/s), media seam (spawn ping-pong vs coreaudio gapless),
 alert-only total silence when healthy, mute toggle ≤ 50 ms and click-free,

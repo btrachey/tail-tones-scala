@@ -1,5 +1,7 @@
 package tailtones.synth
 
+import tailtones.cfg.Config
+
 /** S17 acceptance: the bed walker — seeded random walk over the pentatonic
   * pool with bounded octave offsets, detune jitter, and dwell times. Mirrors
   * [[ArpeggiatorSpec]]'s determinism/membership contract, NOT the ascending
@@ -58,6 +60,30 @@ class DroneWalkerSpec extends munit.FunSuite:
     val none =
       DroneWalker(pool, seed = 42L, jitterCents = 0.0).seq(50, baseMs = 4500L)
     assert(none.forall(_.detuneCents == 0.0))
+  }
+
+  test("DEFAULTS match the calm bed: span 0 in-pool, detune ±6 c, dwell 15 s ±15%") {
+    // Mirror the Scheduler's construction (Scheduler.scala droneWalker):
+    // the shipped bed runs the walker on Config.Default.bed values.
+    val b = Config.Default.bed
+    assertEquals(b.droneOctaveSpan, 0)
+    assertEquals(b.droneJitterCents, 6.0)
+    assertEquals(b.droneIntervalMs, 15000L)
+    assertEquals(b.droneIntervalJitter, 0.15)
+    val w = DroneWalker(
+      pool,
+      seed = 5L,
+      jitterCents = b.droneJitterCents,
+      octaveSpan = b.droneOctaveSpan,
+      intervalJitter = b.droneIntervalJitter
+    )
+    val lo = (b.droneIntervalMs * (1 - b.droneIntervalJitter)).toLong
+    val hi = (b.droneIntervalMs * (1 + b.droneIntervalJitter)).toLong + 1
+    w.seq(300, b.droneIntervalMs).foreach { s =>
+      assert(pool.contains(s.midi), s"$s left the pool (span must be 0)")
+      assert(s.detuneCents.abs <= b.droneJitterCents + 1e-9, s"$s")
+      assert(s.intervalMs >= lo && s.intervalMs <= hi, s"$s")
+    }
   }
 
   test("interval jitters ±intervalJitter around base, floor 500 ms") {

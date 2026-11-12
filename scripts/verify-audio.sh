@@ -8,7 +8,7 @@
 # to the transport-override binaries).
 #
 # Checklist (plan §8 "Real audio" row + S12 §G/§H + S13 §G human-ears items):
-#   1. builtin bed consonant         (healthy log → clean chiptune bed)
+#   1. builtin bed consonant         (healthy log → calm sine-fourth drone)
 #   2. warn detune audible           (≈6 warn/min → first threshold S≈0.35)
 #   3. error saw cuts through        (error stream → saw alerts, rate-guarded)
 #   4. media loop smooth             (S12: ping-pong seam ≤30 ms + one-time
@@ -207,7 +207,7 @@ printf '\ntail-tones §8 audio verification — binary: %s · backend: %s · %s 
   "$BIN" "$BACKEND" "$([[ $AUTO -eq 1 ]] && echo AUTO || echo INTERACTIVE)"
 
 # ------------------------------------------------------ 1/7 builtin bed
-step_head "1/7 builtin bed consonant" "S17: continuous pentatonic tone that slowly glides between pitches (crossfades overlap, never stops, no pulses); NO detune, NO alerts (plan §7.3 row 1: 10 info/min → S≈0.06). spawn/backend=spawn plays the burst grid instead."
+step_head "1/7 builtin bed consonant" "S17-R: calm continuous tone — sine pair a perfect fourth apart, slow random pitch moves (~15 s dwell, ~3 s glide; overlap during moves, never stops, no pulses, QUIET); NO grit, NO alerts (plan §7.3 row 1: 10 info/min → S≈0.06). spawn/backend=spawn plays the louder square-chord burst grid instead."
 F="$TMPD/bed.fifo"; mkfifo "$F"
 feed "$TMPD/healthy10.in" 6 > "$F" & GEN=$!; disown $GEN   # 10 info/min (plan §7.3 row 1)
 start_step bed "$F" --backend "$BACKEND" --print-events
@@ -223,7 +223,7 @@ err_grep bed "kind=engine-start .*name=" "engine-start emitted"
 err_grep bed "kind=voice-start .*source=bed|kind=bed-drone" "bed scheduled (bedGain>0: drone or burst grid)"
 err_grep bed "kind=alert-start" "NO alerts while healthy" neg
 check_orphans "bed"
-listen "bed a CONSTANT tone, consonant, slowly wandering the pentatonic scale; glide transitions smooth (no click/zip), no gaps/pulses; alert-free while healthy?"
+listen "bed a CONSTANT, QUIET consonant tone (sine pair, perfect fourth — should sound soft/pure, no chiptune buzz), slowly wandering the pentatonic scale; glide transitions smooth (no click/zip), no gaps/pulses; alert-free while healthy?"
 
 # ------------------------------------------------------ 2/7 warn detune
 step_head "2/7 warn detune audible" "≈6 warn/min steady-state hits S≈0.35 (plan §7.3 row 3) → FIRST detune layer: audible beat/roughness over the bed. This step runs 8 warn at 3 s spacing (~24 s window) so layers>=1 is checkable in one pause."

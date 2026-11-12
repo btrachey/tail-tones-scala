@@ -8,22 +8,30 @@ Keep-a-Changelog conventions; versions are slice-assembled (see
 
 ### Changed
 
-- **The default bed is now a continuous drone** (S17): one constant 8-bit
-  square tone that slowly, randomly wanders the major-pentatonic pool
-  (C4–A5 ± one octave) — every ~4.5 s (±25 %) the walker picks the next pitch
-  and the mixer crossfades to it over ~1.2 s, the departing and arriving
-  pitches briefly overlapping, so the bed never stops. Rendered additively in
-  the shared mixer (`PcmMixer.mixDrone`, quantized at `bed.bits`, riding
-  `bedGain` — ducking and SIGUSR1 mute apply unchanged), NOT as one-shot
-  voices: alerts can no longer gate the bed. Seeded per `seed` — the whole
-  walk is deterministic for goldens. New `bed` config keys `drone` (default
-  `true`; `false` restores the plan's arpeggio burst grid), `droneIntervalMs`,
-  `droneGlideMs`, `droneOctaveSpan`, `droneJitterCents`,
-  `droneIntervalJitter`. Drone-capable backends (null, ffplay-pipe,
+- **The default bed is now a calm continuous drone** (S17): one constant tone
+  — two **sine waves a perfect fourth apart** (f and 4⁄3·f, just intonation) —
+  rooted on a seeded random walk over the major-pentatonic pool (C4–A5).
+  Every ~15 s (±15 %) the walker picks the next pitch and the mixer crossfades
+  to it over ~3 s, the departing and arriving pairs briefly overlapping, so
+  the bed never stops. Rendered additively in the shared mixer
+  (`PcmMixer.mixDrone`, quantized at `bed.bits`, riding `bedGain` — ducking
+  and SIGUSR1 mute apply unchanged), NOT as one-shot voices: alerts can no
+  longer gate the bed. At rest the bed is pure; severity re-adds the §7.3
+  roughness (detuned partner + minor-2nd sine grit, saw under the fourth in
+  error territory) via the live layers snapshot. Seeded per `seed` — the whole
+  walk is deterministic for goldens. `bed.volume` default 0.35 → **0.20**:
+  the constant-duty bed ≈ 57 % louder perceived than the old 43 %-duty burst
+  grid at the same gain, and the user asked for quieter. New `bed` config keys
+  `drone` (default `true`; `false` restores the plan's one-shot square-chord
+  arpeggio burst grid), `droneIntervalMs` (15000), `droneGlideMs` (3000),
+  `droneOctaveSpan` (0 — set 1–2 for octave jumps), `droneJitterCents` (6),
+  `droneIntervalJitter` (0.15). Drone-capable backends (null, ffplay-pipe,
   alsa-pipe, coreaudio) get the tone; `spawn` keeps the burst grid (per-voice
   `afplay` children cannot sustain a tone). New `--print-events` kind
-  `bed-drone`; null backend records `drone freqHz=` per publish. See
-  `docs/spikes/S17.md`.
+  `bed-drone wave=sine`; null backend records `drone freqHz=` per publish.
+  The JSON parser now takes ALL section defaults from `Config.Default` (no
+  second copy of the truth — a JSON omitting drone keys previously kept the
+  old loud/fast literals). See `docs/spikes/S17.md`.
 
 ## 0.1.0 — 2026-11-10
 

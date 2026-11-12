@@ -40,32 +40,36 @@ final case class BedSection(
     waveform: Waveform = Waveform.Square,
     tempoBpm: Int = 100,
     scale: Scale = Scale.MajorPentatonic,
-    volume: Double = 0.35,
+    volume: Double = 0.20,
     noteDecayMs: Long = 260L,
     bits: Int = 4,
     duckOnSeverity: Boolean = true,
     duckMax: Double = 0.35,
-    /** Default bed: one continuous pentatonic tone that slowly moves between
-      * scale pitches (random walk, octave offsets allowed, brief overlap
-      * during the glide). `false` restores the plan's one-shot arpeggiator
-      * burst grid. Non-streaming backends (`spawn`) always use the burst
-      * grid — they cannot sustain a tone.
+    /** Default bed: one continuous tone — a pair of SINES a perfect fourth
+      * apart (f, 4/3·f) — that slowly moves between scale pitches (random
+      * walk, brief overlap during the glide). `false` restores the plan's
+      * one-shot arpeggiator burst grid (square chord). Non-streaming backends
+      * (`spawn`) always use the burst grid — they cannot sustain a tone.
       */
     drone: Boolean = true,
-    /** Nominal dwell on one pitch before the walker moves (± jitter below). */
-    droneIntervalMs: Long = 4500L,
+    /** Nominal dwell on one pitch before the walker moves (± jitter below).
+      * Slow on purpose: the calm bed re-pitches roughly every quarter minute.
+      */
+    droneIntervalMs: Long = 15000L,
     /** Length of the pitch move: old voice fades out while the new one glides
       * in from it — the two overlap for this window.
       */
-    droneGlideMs: Long = 1200L,
-    /** Pitch pool registration: octave offsets ∈ [−span, +span]. */
-    droneOctaveSpan: Int = 1,
-    /** Per-move seeded detune jitter, cents (same family as the bed
-      * arpeggiator's 25 c).
+    droneGlideMs: Long = 3000L,
+    /** Pitch pool registration: octave offsets ∈ [−span, +span]. 0 = stay in
+      * the written C4–A5 range (calm default); 1–2 allow octave jumps.
       */
-    droneJitterCents: Double = 25.0,
+    droneOctaveSpan: Int = 0,
+    /** Per-move seeded detune jitter, cents. Small: the pair is tuned a just
+      * fourth and wide detune reads as beating, not calm.
+      */
+    droneJitterCents: Double = 6.0,
     /** ±fraction applied to the dwell time (never below 500 ms). */
-    droneIntervalJitter: Double = 0.25
+    droneIntervalJitter: Double = 0.15
 )
 
 /** Plan §4.1 `alert` section (saw alerts, §6.4/§7.2). */

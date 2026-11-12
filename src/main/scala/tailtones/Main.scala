@@ -73,10 +73,11 @@ import java.util.concurrent.atomic.{
   *   - `kind=voice-start source=bed wave=<w> midi=<n> freqHz=<f> durMs=<n>
   *     gain=<f> detuneCents=<f>` — one bed note on the arpeggio grid
   *     (burst fallback: `bed.drone=false` or a non-streaming backend)
-  *   - `kind=bed-drone wave=<w> midi=<n> freqHz=<f> detuneCents=<f>
-  *     intervalMs=<n> gain=<f>` (S17) — the continuous bed tone republishes
-  *     its target at every seeded walker dwell (the default on drone-capable
-  *     backends: null, ffplay-pipe, alsa-pipe, coreaudio)
+  *   - `kind=bed-drone wave=sine midi=<n> freqHz=<f> detuneCents=<f>
+  *     intervalMs=<n> gain=<f>` (S17) — the continuous bed tone (sine pair a
+  *     perfect fourth apart, f·4/3) republishes its target at every seeded
+  *     walker dwell (the default on drone-capable backends: null,
+  *     ffplay-pipe, alsa-pipe, coreaudio)
   *   - `kind=alert-start source=alert wave=saw freqHz=<f> durMs=<n> gain=<f>
   *     octave=<-1|0|1> live=<n>` — one granted alert (§7.2) All emitted under
   *     the tee lock. S14 goldens diff these lines. S13 EXTENDS the namespace

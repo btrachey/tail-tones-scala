@@ -339,9 +339,15 @@ object JsonConfig:
         rates <- opt(o, "rates", c, path, SeveritySection.DefaultRates)(
           ratesMap
         )
-        decay <- opt(o, "decayHalfLifeMs", c, path, 8000L)(long)
-        tick <- opt(o, "tickMs", c, path, 50L)(long)
-        maxS <- opt(o, "maxSeverity", c, path, 1.0)(num)
+        decay <- opt(
+          o,
+          "decayHalfLifeMs",
+          c,
+          path,
+          Config.Default.severity.decayHalfLifeMs
+        )(long)
+        tick <- opt(o, "tickMs", c, path, Config.Default.severity.tickMs)(long)
+        maxS <- opt(o, "maxSeverity", c, path, Config.Default.severity.maxSeverity)(num)
       yield SeveritySection(rates, decay, tick, maxS)
     }
 
@@ -371,21 +377,27 @@ object JsonConfig:
       c,
       path
     ).flatMap { _ =>
+      // Defaults reference Config.Default.bed DIRECTLY — a JSON that omits
+      // keys must never keep a second copy of the truth (S17-R: hardcoded
+      // drone literals here silently defeated the slower/quieter defaults on
+      // the file-config path; JsonConfigSpec's gap-fill test pins all 14).
+      val d = Config.Default.bed
       for
-        wf <- opt(o, "waveform", c, path, Waveform.Square)(waveformField)
-        tempo <- opt(o, "tempoBpm", c, path, 100)(int)
-        scale <- opt(o, "scale", c, path, Scale.MajorPentatonic)(scaleField)
-        vol <- opt(o, "volume", c, path, 0.35)(num)
-        decay <- opt(o, "noteDecayMs", c, path, 260L)(long)
-        bits <- opt(o, "bits", c, path, 4)(int)
-        duck <- opt(o, "duckOnSeverity", c, path, true)(bool)
-        duckMax <- opt(o, "duckMax", c, path, 0.35)(num)
-        drone <- opt(o, "drone", c, path, true)(bool)
-        droneInt <- opt(o, "droneIntervalMs", c, path, 4500L)(long)
-        droneGlide <- opt(o, "droneGlideMs", c, path, 1200L)(long)
-        droneOct <- opt(o, "droneOctaveSpan", c, path, 1)(int)
-        droneJit <- opt(o, "droneJitterCents", c, path, 25.0)(num)
-        droneIJit <- opt(o, "droneIntervalJitter", c, path, 0.25)(num)
+        wf <- opt(o, "waveform", c, path, d.waveform)(waveformField)
+        tempo <- opt(o, "tempoBpm", c, path, d.tempoBpm)(int)
+        scale <- opt(o, "scale", c, path, d.scale)(scaleField)
+        vol <- opt(o, "volume", c, path, d.volume)(num)
+        decay <- opt(o, "noteDecayMs", c, path, d.noteDecayMs)(long)
+        bits <- opt(o, "bits", c, path, d.bits)(int)
+        duck <- opt(o, "duckOnSeverity", c, path, d.duckOnSeverity)(bool)
+        duckMax <- opt(o, "duckMax", c, path, d.duckMax)(num)
+        drone <- opt(o, "drone", c, path, d.drone)(bool)
+        droneInt <- opt(o, "droneIntervalMs", c, path, d.droneIntervalMs)(long)
+        droneGlide <- opt(o, "droneGlideMs", c, path, d.droneGlideMs)(long)
+        droneOct <- opt(o, "droneOctaveSpan", c, path, d.droneOctaveSpan)(int)
+        droneJit <- opt(o, "droneJitterCents", c, path, d.droneJitterCents)(num)
+        droneIJit <-
+          opt(o, "droneIntervalJitter", c, path, d.droneIntervalJitter)(num)
       yield BedSection(
         wf,
         tempo,
@@ -422,13 +434,16 @@ object JsonConfig:
       c,
       path
     ).flatMap { _ =>
+      // Config.Default.alert fallbacks — same no-second-truth rule as
+      // bedSection above.
+      val da = Config.Default.alert
       for
-        wf <- opt(o, "waveform", c, path, Waveform.Saw)(waveformField)
-        vol <- opt(o, "volume", c, path, 0.55)(num)
-        minI <- opt(o, "minIntervalMs", c, path, 150L)(long)
-        burst <- opt(o, "burstCooldownMs", c, path, 2000L)(long)
-        poly <- opt(o, "maxPolyphony", c, path, 3)(int)
-        trig <- opt(o, "triggerBase", c, path, 0.10)(num)
+        wf <- opt(o, "waveform", c, path, da.waveform)(waveformField)
+        vol <- opt(o, "volume", c, path, da.volume)(num)
+        minI <- opt(o, "minIntervalMs", c, path, da.minIntervalMs)(long)
+        burst <- opt(o, "burstCooldownMs", c, path, da.burstCooldownMs)(long)
+        poly <- opt(o, "maxPolyphony", c, path, da.maxPolyphony)(int)
+        trig <- opt(o, "triggerBase", c, path, da.triggerBase)(num)
       yield AlertSection(wf, vol, minI, burst, poly, trig)
     }
 
@@ -455,7 +470,8 @@ object JsonConfig:
       path: List[String]
   ): Either[List[ConfigError], TailSection] =
     checkKeys(o, Seq("pollMs"), c, path).flatMap { _ =>
-      opt(o, "pollMs", c, path, 100L)(long).map(TailSection(_))
+      opt(o, "pollMs", c, path, Config.Default.tail.pollMs)(long)
+        .map(TailSection(_))
     }
 
   private def mediaField(

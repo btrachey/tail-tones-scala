@@ -110,9 +110,15 @@ class JsonConfigSpec extends munit.FunSuite:
     val c = ok("""{"volume": 0.2, "bed": {"bits": 6}}""")
     assertEqualsDouble(c.volume, 0.2, 1e-12)
     assertEquals(c.bed.bits, 6)
-    assertEqualsDouble(c.bed.volume, 0.35, 1e-12) // default fills
-    assertEquals(c.bed.waveform, Waveform.Square) // default fills
-    assertEqualsDouble(c.alert.volume, 0.55, 1e-12)
+    // SECTION EQUALITY, not per-key literals: the parser once carried a
+    // second copy of the drone defaults as literals and silently served the
+    // old loud/fast drone to any JSON omitting those keys (S17-R). `ok("{}")`
+    // cannot catch this — the root falls back to BedSection(), bypassing the
+    // per-key opt() defaults; only a PARTIAL section walks them.
+    assertEquals(c.bed, Config.Default.bed.copy(bits = 6))
+    assertEquals(c.alert, Config.Default.alert)
+    assertEquals(c.severity, Config.Default.severity)
+    assertEquals(c.tail, Config.Default.tail)
     assertEquals(c.profile, "auto")
   }
 
