@@ -115,12 +115,14 @@ fire saw-wave alerts:
 printf '2026-11-09 10:00:00,100 INFO request served path=/health\n2026-11-09 10:00:00,200 INFO request served path=/api\n' | tail-tones --print-events -q
 ```
 
-The tone is ADDITIVE: it keeps sounding under alert bursts and media beds —
-the ring can never gate it. Tune (or disable — `"drone": false` restores the
-plan's one-shot arpeggio burst grid; the `spawn` backend always uses the grid
-because per-voice `afplay` children can't sustain a tone) via the `bed`
-config keys `drone`, `droneIntervalMs`, `droneGlideMs`, `droneOctaveSpan`,
-`droneJitterCents`, `droneIntervalJitter`.
+The tone is ADDITIVE: inside builtin mode it keeps sounding under alert
+bursts — the ring can never gate it. (Media mode is unchanged: your file IS
+the bed and the drone stays silent there; alert-only silences both.) Tune
+(or disable — `"drone": false` restores the plan's one-shot arpeggio burst
+grid; the `spawn` backend always uses the grid because per-voice `afplay`
+children can't sustain a tone) via the `bed` config keys `drone`,
+`droneIntervalMs`, `droneGlideMs`, `droneOctaveSpan`, `droneJitterCents`,
+`droneIntervalJitter`.
 
 `--print-events` prints the scheduler's event stream to stderr
 (`kind=level`/`mix-tick`/`bed-drone`/`voice-start`/`alert-start`/

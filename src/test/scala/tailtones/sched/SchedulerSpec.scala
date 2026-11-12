@@ -393,6 +393,7 @@ class SchedulerSpec extends munit.FunSuite:
     h.scheduler.stop()
     assertEquals(h.kinds.count(_ == "voice-start"), 0)
     assertEquals(h.bedVoices.size, 0)
+    assertEquals(h.droneStarts.size, 0, "alert-only must NOT arm the drone")
     assert(h.mixes.exists(_.alertGain == 1.0f), h.mixes.toString) // cap
     assert(h.mixes.forall(_.bedGain == 0.0f))
     assert(h.mixes.forall(_.duck == 0.0f)) // ducking n/a without a bed
@@ -422,6 +423,7 @@ class SchedulerSpec extends munit.FunSuite:
     h.run(60)
     h.scheduler.stop()
     assertEquals(h.bedVoices.size, 0) // §6.3: bed is the file, not the synth
+    assertEquals(h.droneStarts.size, 0, "media must NOT arm the drone")
     assertEquals(h.engine.events(1), "bedloop /tmp/bed.wav")
     assert(h.alertStarts.nonEmpty) // alerts unaffected by media mode
   }

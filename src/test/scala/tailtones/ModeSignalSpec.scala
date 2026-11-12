@@ -148,6 +148,11 @@ class ModeSignalSpec extends munit.FunSuite:
     h.scheduler.stop()
     assertEquals(h.bedVoices, Vector.empty, "media must NOT play synth bed")
     assertEquals(
+      h.droneStarts,
+      Vector.empty,
+      "media must NOT arm the continuous drone (the file IS the bed)"
+    )
+    assertEquals(
       h.kinds.count(_ == "bedloop"),
       2,
       s"bedloop Some at start + None at stop: ${h.kinds}"
@@ -171,6 +176,11 @@ class ModeSignalSpec extends munit.FunSuite:
     }
     h.scheduler.stop()
     assertEquals(h.bedVoices, Vector.empty)
+    assertEquals(
+      h.droneStarts,
+      Vector.empty,
+      "alert-only must NOT arm the continuous drone"
+    )
     assert(h.mixes.forall(_.bedGain == 0.0f), h.mixes.toString)
     assert(h.mixes.forall(_.duck == 0.0f), "no bed → nothing to duck")
     assert(h.alertStarts.nonEmpty)
@@ -234,6 +244,12 @@ class ModeSignalSpec extends munit.FunSuite:
     }
     assert(h.scheduler.lastSeverity > 0.0)
     val voicesBefore = h.engine.events.count(_.startsWith("voice "))
+    // S17 default bed is the DRONE: pin that it was sounding pre-mute and
+    // that mute PULLS the target — the voice-count check above is blind to
+    // it (drone lines are `drone freqHz=`, not `voice `).
+    val droneLinesBefore =
+      h.engine.events.count(_.startsWith("drone freqHz="))
+    assert(droneLinesBefore > 0, "drone never sounded pre-mute")
 
     // SIGUSR1 (fake dispatch): mute ON
     pump.dispatch(SignalPump.SIGUSR1)
@@ -247,6 +263,11 @@ class ModeSignalSpec extends munit.FunSuite:
       h.engine.events.count(_.startsWith("voice ")),
       voicesBefore,
       "muted engine received voices"
+    )
+    assertEquals(
+      h.engine.events.count(_.startsWith("drone freqHz=")),
+      droneLinesBefore,
+      "muted scheduler kept publishing drone targets (walker ran while muted)"
     )
     assertEquals(h.alertStarts.size, 0)
     assert(

@@ -30,7 +30,7 @@ import scala.util.matching.Regex
   *     pair `kind=engine-start` / `kind=engine-stop` (engine name + fadeMs —
   *     deterministic lifecycle brackets).
   *   - DROPPED kinds: `mix-tick`, `voice-start`, `alert-start`, `bedloop`,
-  *     `mute` — their COUNTS depend on how many real 50 ms ticks fit between
+  *     `mute`, `bed-drone` — their COUNTS depend on how many real 50 ms ticks fit between
   *     reader start and EOF (timing), not on the input bytes. The scheduler's
   *     timing-dependent behavior is pinned fake-clock-deterministically by
   *     `SchedulerSpec` goldens instead (that is the S9 layer of the same
@@ -186,6 +186,10 @@ class FixtureE2eSpec extends munit.FunSuite:
     assertEquals(normalizeEvent("event kind=voice-start seq=5 t=1"), None)
     assertEquals(normalizeEvent("event kind=bedloop seq=5 t=1 path=none"), None)
     assertEquals(normalizeEvent("event kind=mute seq=5 t=1 state=on"), None)
+    assertEquals(
+      normalizeEvent("event kind=bed-drone seq=5 t=1 freqHz=261.6"),
+      None
+    )
     // banner + anything else: dropped
     assertEquals(
       normalizeEvent("tail-tones: reading stdin (mode=builtin)"),

@@ -11,10 +11,11 @@
 #   - strip volatile t=<epochMs> and seq=<n> from every kept event line;
 #   - keep ONLY kind=level (full raw line after line=), kind=engine-start and
 #     kind=engine-stop (deterministic lifecycle brackets);
-#   - DROP kind=mix-tick / voice-start / alert-start / bedloop / mute: their
-#     counts depend on how many real 20 Hz scheduler ticks fit between reader
-#     start and EOF (wall-clock timing), not on the input bytes. Timing-
-#     dependent scheduler behavior is pinned fake-clock-deterministically by
+#   - DROP kind=mix-tick / voice-start / alert-start / bedloop / mute /
+#     bed-drone: their counts depend on how many real 20 Hz scheduler ticks
+#     fit between reader start and EOF (wall-clock timing), not on the input
+#     bytes. Timing-dependent scheduler behavior is pinned
+#     fake-clock-deterministically by
 #     SchedulerSpec goldens (docs/spikes/S14.md).
 #   - banner/diagnostics never start with "event " (and -q silences them).
 #

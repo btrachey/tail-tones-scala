@@ -286,10 +286,12 @@ kill -TERM "$PID" 2>/dev/null
 wait_step ao; [[ "$RC" == "0" ]] && ok "alert-only: clean exit 0" || bad "alert-only: exit $RC"
 check_tee ao "$TMPD/ao.in"; kill "$GEN" 2>/dev/null
 # no bed voice may fire BEFORE the first error classification (S13 §C policy).
-# NOTE: raw event lines carry seq=/t= BETWEEN the fields — match the real shape.
+# S17: the default bed is the drone — a bed-drone before the first error is
+# the same violation. NOTE: raw event lines carry seq=/t= BETWEEN the fields.
 if awk '
   /^event kind=level seq=[0-9]+ t=[0-9]+ level=error / { e=1 }
   /^event kind=voice-start / && !e { bed=1 }
+  /^event kind=bed-drone / && !e { bed=1 }
   END { exit bed ? 1 : 0 }' "$E"; then
   ok "alert-only: zero bed voices while healthy"
 else
