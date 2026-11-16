@@ -50,7 +50,7 @@ object Args:
   )
 
   /** `-V/--version` stdout line (plan §3). S16 wires a real version source. */
-  val VersionString: String = "tail-tones 0.1.0"
+  val VersionString: String = "tail-tones 0.1.1"
 
   /** Plan §3 usage block, verbatim flag matrix. `-h/--help` print this to
     * stdout (exit 0); usage ERRORS print it to stderr (exit 2).

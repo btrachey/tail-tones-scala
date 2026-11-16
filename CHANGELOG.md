@@ -6,6 +6,10 @@ Keep-a-Changelog conventions; versions are slice-assembled (see
 
 ## Unreleased
 
+_None yet._
+
+## 0.1.1 — 2026-11-16
+
 ### Changed
 
 - **`--help` no longer cites internal plan/slice references** (`S14 §11.3`,
