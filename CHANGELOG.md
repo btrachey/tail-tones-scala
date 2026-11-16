@@ -8,6 +8,9 @@ Keep-a-Changelog conventions; versions are slice-assembled (see
 
 ### Changed
 
+- **`--help` no longer cites internal plan/slice references** (`S14 §11.3`,
+  `§4.3` dropped from the `-f`/`-c` lines); README Usage block regenerated
+  from the linked binary.
 - **The default bed is now a calm continuous drone** (S17): one constant tone
   — two **sine waves a perfect fourth apart** (f and 4⁄3·f, just intonation) —
   rooted on a seeded random walk over the major-pentatonic pool (C4–A5).
