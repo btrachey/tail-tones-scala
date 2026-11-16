@@ -11,20 +11,17 @@ byte-for-byte — `tail-tones` never touches your log stream.
 yourapp 2>&1 | tail-tones
 ```
 
-Severity is an EWMA over classified log lines (8 s half-life by default), so a
-one-off error spikes and fades over ~16 s, warn drift creeps in, and log floods
+Severity is averaged over log lines (8s half-life by default), so a
+one-off error spikes and fades over ~16s, warn drift creeps in, and log floods
 are rate-guarded: more errors ⇒ maximum tension, never a machine-gun.
-
-v1 supports macOS and Linux. Windows, packaging, and a TUI are explicit
-non-goals.
 
 ## Modes
 
-| Mode | Healthy sound | Bad sound |
-|---|---|---|
-| `builtin` (default) | calm continuous drone: sine pair (f, 4⁄3·f) on a seeded random walk over the major-pentatonic scale, new pitch every ~15 s with a ~3 s crossfade, so the tone never stops | detuned grit + saw alerts on top; severity ducks the bed |
-| `media` | your own audio file loops (`mp3`/`wav`/`m4a`/`aac`/`flac`; `ogg` needs ffmpeg) | saw alerts layered on top |
-| `alert-only` | total silence (listen to your own music elsewhere) | only the alerts, 1.25× headroom, louder/more frequent as severity grows |
+| Mode                | Healthy sound                                                                                                                                                             | Bad sound                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `builtin` (default) | calm continuous drone: sine pair (f, 4⁄3·f) on a seeded random walk over the major-pentatonic scale, new pitch every ~15 s with a ~3 s crossfade, so the tone never stops | detuned grit + saw alerts on top; severity ducks the bed                |
+| `media`             | your own audio file loops (`mp3`/`wav`/`m4a`/`aac`/`flac`; `ogg` needs ffmpeg)                                                                                            | saw alerts layered on top                                               |
+| `alert-only`        | total silence (listen to your own music elsewhere)                                                                                                                        | only the alerts, 1.25× headroom, louder/more frequent as severity grows |
 
 `bed.drone=false` restores the original one-shot square-chord arpeggio burst
 grid (the `spawn` backend always uses it, since per-voice `afplay` children
@@ -33,7 +30,17 @@ can't sustain a tone). A missing or undecodable `--media` file is a hard error
 
 ## Install
 
-Build from this checkout (Scala Native — needs `sbt` and a clang toolchain):
+Homebrew (macOS) — builds from source via the `btrachey/tap` tap. Build
+dependencies (`sbt`, `openjdk`, `llvm`) are pulled automatically; the first
+install takes a few minutes.
+
+```sh
+brew tap btrachey/tap
+brew install tail-tones
+```
+
+Or build from this checkout (Scala Native — needs `sbt` and a clang
+toolchain):
 
 ```sh
 sbt nativeLink
@@ -41,9 +48,12 @@ sbt nativeLink
 scripts/install.sh   # copies it to ~/.local/bin (any existing binary is backed up)
 ```
 
-If `tail-tones` is then `command not found`, `~/.local/bin` isn't on your
-PATH — add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile
-(`install.sh` prints the same hint).
+If `tail-tones` is then `command not found` (checkout installs only),
+`~/.local/bin` isn't on your PATH — add `export PATH="$HOME/.local/bin:$PATH"`
+to your shell profile (`install.sh` prints the same hint). If you later
+install via Homebrew too, the two copies evolve independently: `which
+tail-tones` shows which one runs — delete `~/.local/bin/tail-tones` to stay
+on the keg.
 
 Sound needs no extra tooling on macOS (AudioQueue built in). On Linux you
 need `ffmpeg` (for `ffplay`) or `alsa-utils` (for `aplay`); `tail-tones` tells
@@ -104,11 +114,11 @@ alters tee'd bytes (prepends an `[E]`/`[W]`/`[I]`/`[D]` badge).
 
 **Exit codes:**
 
-| Code | Meaning |
-|---|---|
-| 0 | clean: EOF on all inputs, or SIGINT/SIGTERM after fade-out |
-| 1 | fatal runtime error (e.g. `EPIPE` — your downstream `head` closed the pipe) |
-| 2 | config / usage error: bad flag, bad JSON, unknown key, out-of-range value, missing or undecodable `--media` |
+| Code | Meaning                                                                                                     |
+| ---- | ----------------------------------------------------------------------------------------------------------- |
+| 0    | clean: EOF on all inputs, or SIGINT/SIGTERM after fade-out                                                  |
+| 1    | fatal runtime error (e.g. `EPIPE` — your downstream `head` closed the pipe)                                 |
+| 2    | config / usage error: bad flag, bad JSON, unknown key, out-of-range value, missing or undecodable `--media` |
 
 ## Configuration
 
@@ -128,7 +138,7 @@ the default shown:
   "fadeoutMs": 400,
 
   "severity": {
-    "rates":   { "debug": 0.00, "info": 0.03, "warn": 0.30, "error": 1.00 },
+    "rates": { "debug": 0.0, "info": 0.03, "warn": 0.3, "error": 1.0 },
     "decayHalfLifeMs": 8000,
     "tickMs": 50,
     "maxSeverity": 1.0
@@ -138,7 +148,7 @@ the default shown:
     "waveform": "square",
     "tempoBpm": 100,
     "scale": "majorPentatonic",
-    "volume": 0.20,
+    "volume": 0.2,
     "noteDecayMs": 260,
     "bits": 4,
     "duckOnSeverity": true,
@@ -157,10 +167,19 @@ the default shown:
     "minIntervalMs": 150,
     "burstCooldownMs": 2000,
     "maxPolyphony": 3,
-    "triggerBase": 0.10
+    "triggerBase": 0.1
   },
 
-  "parsers": { "keyword": { "patterns": { "debug": ["TRACE","DEBUG"], "info": ["INFO"], "warn": ["WARN","WARNING"], "error": ["ERROR","FATAL","SEVERE"] } } },
+  "parsers": {
+    "keyword": {
+      "patterns": {
+        "debug": ["TRACE", "DEBUG"],
+        "info": ["INFO"],
+        "warn": ["WARN", "WARNING"],
+        "error": ["ERROR", "FATAL", "SEVERE"]
+      }
+    }
+  },
 
   "tail": { "pollMs": 100 }
 }
@@ -173,8 +192,8 @@ the default shown:
   deliberately severity-silent).
 - `parsers.keyword.patterns` **replaces** the defaults wholesale when present.
 - The anti-machine-gun trio is `alert.minIntervalMs` + `alert.burstCooldownMs`
-  + `alert.maxPolyphony`: however fast your errors arrive, alerts stay ≤ ~7/s
-  with ≤ 3 live.
+  - `alert.maxPolyphony`: however fast your errors arrive, alerts stay ≤ ~7/s
+    with ≤ 3 live.
 
 ### Discovery & precedence
 
@@ -197,16 +216,16 @@ Any config key is settable via env, plus transport-path overrides. An empty
 value means "unset"; unknown `TAIL_TONES_*` names are ignored; invalid values
 exit 2 naming the variable. The common ones:
 
-| Variable | Meaning |
-|---|---|
-| `TAIL_TONES_PROFILE` | `keyword\|logback\|logfmt\|json\|docker\|auto` |
-| `TAIL_TONES_MODE` | `builtin\|media\|alert-only` |
-| `TAIL_TONES_MEDIA` | media bed path (`~` and relative paths expand) |
-| `TAIL_TONES_BACKEND` | `auto\|null\|spawn\|ffplay-pipe\|coreaudio\|alsa-pipe` |
-| `TAIL_TONES_VOLUME` | master volume 0..1 — **re-read live, every tick** |
-| `TAIL_TONES_FADEOUT_MS` | EOF fade-out length (≥ 0) |
-| `TAIL_TONES_SEVERITY_RATES` | per-level rates spec, e.g. `warn=0.5,error=1.5` |
-| `TAIL_TONES_QUIET` | true/1/yes — suppresses the stderr banner |
+| Variable                    | Meaning                                                |
+| --------------------------- | ------------------------------------------------------ |
+| `TAIL_TONES_PROFILE`        | `keyword\|logback\|logfmt\|json\|docker\|auto`         |
+| `TAIL_TONES_MODE`           | `builtin\|media\|alert-only`                           |
+| `TAIL_TONES_MEDIA`          | media bed path (`~` and relative paths expand)         |
+| `TAIL_TONES_BACKEND`        | `auto\|null\|spawn\|ffplay-pipe\|coreaudio\|alsa-pipe` |
+| `TAIL_TONES_VOLUME`         | master volume 0..1 — **re-read live, every tick**      |
+| `TAIL_TONES_FADEOUT_MS`     | EOF fade-out length (≥ 0)                              |
+| `TAIL_TONES_SEVERITY_RATES` | per-level rates spec, e.g. `warn=0.5,error=1.5`        |
+| `TAIL_TONES_QUIET`          | true/1/yes — suppresses the stderr banner              |
 
 `TAIL_TONES_COREAUDIO=0/1` skips/forces the coreaudio probe (headless/CI
 escape hatch), and `TAIL_TONES_AFPLAY`, `_AFINFO`, `_FFPLAY`, `_APLAY`,
@@ -227,13 +246,13 @@ one-line stderr explanation (unless `-q`) — **`tail-tones` never goes silent
 without telling you why.** An explicitly requested but unavailable backend
 also degrades to `null` with a stderr note rather than failing.
 
-| Backend | OS | Mechanism | External deps |
-|---|---|---|---|
-| `coreaudio` | macOS | in-process AudioQueue, latency ≤ ~41 ms | none; media beds transcoded to WAV via **ffmpeg** |
-| `ffplay-pipe` | macOS + Linux | one persistent `ffplay` child; mixer writes raw s16le PCM to its stdin | `ffplay` (from **ffmpeg**) |
-| `alsa-pipe` | Linux | one persistent `aplay -t raw` child, same PCM pipe | `aplay` (**alsa-utils**); media via **mpg123** or **ffmpeg** |
-| `spawn` | macOS | pre-rendered WAV bank + one `afplay` child per voice | none (`afplay` decodes mp3/m4a/aac/flac; `ogg` needs ffmpeg). ~1.4 s fixed overhead per voice — fallback, not default |
-| `null` | any | records events for `--print-events`; no sound | none |
+| Backend       | OS            | Mechanism                                                              | External deps                                                                                                         |
+| ------------- | ------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `coreaudio`   | macOS         | in-process AudioQueue, latency ≤ ~41 ms                                | none; media beds transcoded to WAV via **ffmpeg**                                                                     |
+| `ffplay-pipe` | macOS + Linux | one persistent `ffplay` child; mixer writes raw s16le PCM to its stdin | `ffplay` (from **ffmpeg**)                                                                                            |
+| `alsa-pipe`   | Linux         | one persistent `aplay -t raw` child, same PCM pipe                     | `aplay` (**alsa-utils**); media via **mpg123** or **ffmpeg**                                                          |
+| `spawn`       | macOS         | pre-rendered WAV bank + one `afplay` child per voice                   | none (`afplay` decodes mp3/m4a/aac/flac; `ogg` needs ffmpeg). ~1.4 s fixed overhead per voice — fallback, not default |
+| `null`        | any           | records events for `--print-events`; no sound                          | none                                                                                                                  |
 
 Ladders: macOS `auto` = `coreaudio` → `ffplay-pipe` → `spawn`; Linux `auto` =
 `ffplay-pipe` → `alsa-pipe` → `null` + stderr install hint.
@@ -243,7 +262,7 @@ Ladders: macOS `auto` = `coreaudio` → `ffplay-pipe` → `spawn`; Linux `auto` 
 **"I hear nothing."** Check stderr:
 
 1. The startup banner (`tail-tones: reading ... backend=...`) — if
-   `backend=null`, an earlier line says *why* (missing `ffplay`/`aplay`, no
+   `backend=null`, an earlier line says _why_ (missing `ffplay`/`aplay`, no
    output device, `TAIL_TONES_COREAUDIO=0`).
 2. `--print-events` proves the scheduler is emitting voices regardless — if
    events flow but no sound, it's the transport, not the engine.
