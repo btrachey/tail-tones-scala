@@ -69,11 +69,11 @@ Usage: tail-tones [options] [FILE...]
 
   -f, --follow           keep reading as files grow (rotation-aware)
                          multi-file: per-file order guaranteed; across
-                         files lines interleave in poll order (S14 §11.3)
+                         files lines interleave in poll order
   -p, --profile NAME     keyword|logback|logfmt|json|docker|auto   (default auto)
   -m, --mode NAME        builtin|media|alert-only            (default builtin)
       --media PATH       audio file for media mode (mp3/wav/m4a/aac/flac)
-  -c, --config PATH      JSON config file (discovery rules §4.3)
+  -c, --config PATH      JSON config file
       --backend NAME     auto|null|spawn|ffplay-pipe|coreaudio|alsa-pipe (default auto)
       --volume FLOAT     master volume 0..1 (overrides config)
       --ratios SPEC      e.g. debug=0,info=0.05,warn=0.3,error=1
