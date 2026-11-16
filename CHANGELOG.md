@@ -191,8 +191,10 @@ its evidence in the cited spike (full rationale in `docs/spikes/`):
 - **Linux media needs an external decoder**: `mpg123` (mp3) or `ffmpeg`
   (flac/ogg); missing → exit 2 with the exact install line, never fake
   silence. `ogg` on the macOS spawn backend likewise requires ffmpeg.
-- **No Windows**; no packaging (brew formula etc.) — plain binary +
-  `scripts/install.sh` is the plan §1 stance.
+- **No Windows**. Packaging (plan §1 said "none"): a Homebrew formula in
+  `btrachey/tap/tail-tones` builds from source (`sbt nativeLink`) — the
+  source repo is private, so cloning needs GitHub credentials (`gh` works).
+  Plain binary + `scripts/install.sh` remains the from-checkout route.
 - **Residual RSS creep under 24/7 follow** is documented (immix does not
   return pages; bounded), not eliminated — runtime-level GC tuning is the
   lever (S13 §B).
