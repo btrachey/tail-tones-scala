@@ -131,8 +131,7 @@ self-contained native binary, no JVM at runtime, no Java audio libraries.
 ### Intentional deviations from `IMPLEMENTATION_PLAN.md`
 
 The plan predates the code; each amendment below is a measured decision with
-its evidence in the cited spike (see README → "Differences from the
-implementation plan" for the full table):
+its evidence in the cited spike (full rationale in `docs/spikes/`):
 
 - **Alert floor** (S9 §A): the §6.4 per-tick lottery is skipped below severity
   `alertMinSeverity = 0.15` — the raw formula paced ~1.5 saw blips/s on a
