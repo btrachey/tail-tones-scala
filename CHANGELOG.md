@@ -192,9 +192,8 @@ its evidence in the cited spike (full rationale in `docs/spikes/`):
   (flac/ogg); missing → exit 2 with the exact install line, never fake
   silence. `ogg` on the macOS spawn backend likewise requires ffmpeg.
 - **No Windows**. Packaging (plan §1 said "none"): a Homebrew formula in
-  `btrachey/tap/tail-tones` builds from source (`sbt nativeLink`); tap and
-  source repo are public, no credentials needed. Plain binary +
-  `scripts/install.sh` remains the from-checkout route.
+  `btrachey/tap/tail-tones` builds from source (`sbt nativeLink`). Plain
+  binary + `scripts/install.sh` remains the from-checkout route.
 - **Residual RSS creep under 24/7 follow** is documented (immix does not
   return pages; bounded), not eliminated — runtime-level GC tuning is the
   lever (S13 §B).
